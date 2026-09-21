@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="clerk-publishable-key" content="pk_live_Y2xlcmsuc3dhYWR4LmluJA">
+  <title>SWAADX Admin</title>
+  <link rel="stylesheet" href="assets/admin.css">
+</head>
+<body class="admin-page">
+  <main class="admin-center">
+    <section class="admin-card admin-card--compact" aria-labelledby="admin-loading-title">
+      <div class="brand">SWAA<span>DX</span> <small>ADMIN</small></div>
+      <h1 id="admin-loading-title">Checking your session</h1>
+      <p id="admin-status" class="muted">Please wait while we securely check access.</p>
+      <div class="spinner" aria-hidden="true"></div>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
+  <script src="assets/admin.js"></script>
+  <script>
+    window.SwaadxAdmin.startGate();
+  </script>
+</body>
+</html>

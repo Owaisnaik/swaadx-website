@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="clerk-publishable-key" content="pk_live_Y2xlcmsuc3dhYWR4LmluJA">
+  <title>Dashboard | SWAADX Admin</title>
+  <link rel="stylesheet" href="assets/admin.css">
+</head>
+<body class="admin-page admin-shell" data-admin-root="" data-admin-section="dashboard" data-admin-title="Dashboard">
+  <main class="admin-main" data-admin-content>
+    <section class="page-heading">
+      <div>
+        <p class="eyebrow">Operations</p>
+        <h1>Platform overview</h1>
+        <p class="muted">Read-only administration foundation for SWAADx.</p>
+      </div>
+      <span id="summary-state" class="status-pill status-pill--neutral">Loading</span>
+    </section>
+
+    <p id="dashboard-error" class="status-message" role="alert"></p>
+
+    <section class="summary-grid" aria-label="Platform summary">
+      <article class="summary-card">
+        <span class="summary-label">Delivery partners</span>
+        <strong id="delivery-partners-count">—</strong>
+        <span class="summary-note">Accounts and onboarding</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">KYC profiles</span>
+        <strong id="kyc-profiles-count">—</strong>
+        <span class="summary-note">Verification workflow</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Restaurants</span>
+        <strong id="restaurants-count">—</strong>
+        <span class="summary-note">Marketplace partners</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Orders</span>
+        <strong id="orders-count">—</strong>
+        <span class="summary-note">Customer transactions</span>
+      </article>
+    </section>
+
+    <section class="module-grid" aria-label="Admin modules">
+      <article class="module-card"><span class="module-icon">DP</span><div><h2>Delivery Partners</h2><p>Partner profiles and account status will appear here.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+      <article class="module-card"><span class="module-icon">KY</span><div><h2>KYC Reviews</h2><p>Review queues will be added after the foundation.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+      <article class="module-card"><span class="module-icon">ID</span><div><h2>Identity Documents</h2><p>Private document review is not enabled yet.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+      <article class="module-card"><span class="module-icon">BP</span><div><h2>Bank / Payout Methods</h2><p>Masked payout workflows will be added later.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+      <article class="module-card"><span class="module-icon">PO</span><div><h2>Payouts</h2><p>Payout operations are not enabled in this foundation.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+      <article class="module-card"><span class="module-icon">RE</span><div><h2>Restaurants</h2><p>Restaurant administration will be added later.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+      <article class="module-card"><span class="module-icon">OR</span><div><h2>Orders</h2><p>Order operations will be added after review.</p></div><span class="status-pill status-pill--neutral">Planned</span></article>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
+  <script src="assets/admin-formatters.js"></script>
+  <script src="assets/admin-components.js"></script>
+  <script src="assets/admin-api-client.js"></script>
+  <script src="assets/admin-shell.js"></script>
+  <script src="assets/admin.js"></script>
+  <script>
+    window.SwaadxAdmin.startDashboard();
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="clerk-publishable-key" content="pk_live_Y2xlcmsuc3dhYWR4LmluJA">
+  <title>Admin Login | SWAADX</title>
+  <link rel="stylesheet" href="assets/admin.css">
+</head>
+<body class="admin-page">
+  <main class="admin-center">
+    <section class="admin-card" aria-labelledby="login-title">
+      <div class="brand">SWAA<span>DX</span> <small>ADMIN</small></div>
+      <h1 id="login-title">Admin login</h1>
+      <p class="muted">Sign in with your authorized SWAADx administrator account.</p>
+      <div id="sign-in" class="clerk-mount" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+      </div>
+      <p id="login-status" class="status-message" role="alert"></p>
+      <a class="back-link" href="../index.html">Return to SWAADx</a>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5/dist/clerk.browser.js"></script>
+  <script src="assets/admin.js"></script>
+  <script>
+    window.SwaadxAdmin.startLogin();
+  </script>
+</body>
+</html>
