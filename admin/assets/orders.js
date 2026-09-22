@@ -43,7 +43,7 @@
           body.textContent = '';
           data.items.forEach(function (order) {
             var action = document.createElement('a'); action.className = 'button button--quiet table-action'; action.href = 'order.html?id=' + encodeURIComponent(order.id); action.textContent = 'View';
-            body.appendChild(row([order.orderNumber, date(order.createdAt), order.status, order.restaurantName, order.customerIdentifier, order.subtotal, order.deliveryFee, order.totalAmount, order.paymentStatus, order.deliveryStatus, action]));
+            body.appendChild(row([order.orderNumber, date(order.createdAt), order.status, order.restaurantName, order.customerName, order.subtotal, order.deliveryFee, order.totalAmount, order.paymentStatus, order.deliveryStatus, action]));
           });
         }
         pagination(data, load);
@@ -63,7 +63,7 @@
       document.querySelector('[data-order-field="status"]').textContent = text(order.status);
       document.querySelector('[data-order-field="createdAt"]').textContent = date(order.createdAt);
       document.querySelector('[data-order-field="restaurant"]').textContent = text(order.restaurant && order.restaurant.name);
-      document.querySelector('[data-order-field="customer"]').textContent = text(order.customerIdentifier);
+      document.querySelector('[data-order-field="customer"]').textContent = text(order.customerName);
       document.querySelector('[data-order-field="paymentStatus"]').textContent = text(order.paymentStatus);
       document.querySelector('[data-order-field="deliveryStatus"]').textContent = text(order.deliveryStatus);
       document.querySelector('[data-order-field="address"]').textContent = text([order.deliveryAddress && order.deliveryAddress.address, order.deliveryAddress && order.deliveryAddress.landmark, order.deliveryAddress && order.deliveryAddress.city, order.deliveryAddress && order.deliveryAddress.state, order.deliveryAddress && order.deliveryAddress.postalCode].filter(Boolean).join(', '));

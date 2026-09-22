@@ -1,4 +1,5 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { createClerkClient } from 'npm:@clerk/backend';
 import { adminResponse, authenticateAdmin, serverRequestId, ADMIN_CORS_HEADERS } from '../_shared/admin-auth.ts';
 import { recordAdminAuditEvent } from '../_shared/admin-audit.ts';
 
@@ -7,6 +8,7 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
+const clerkClient = createClerkClient({ secretKey: Deno.env.get('CLERK_SECRET_KEY') ?? '' });
 
 const navigation = [
   { label: 'Dashboard', href: 'dashboard.html', key: 'dashboard' },
@@ -79,7 +81,7 @@ function safePage<T>(rows: T[], count: number | null, page: number, pageSize: nu
 
 const restaurantColumns = 'id,name,description,address,phone,created_at,cuisine,city,state,country,postal_code,landmark,latitude,longitude,is_available,lifecycle_status,archived_at,archived_by_admin_id,archive_reason,opening_hours,delivery_radius_km,preparation_time_minutes,cover_image';
 const menuItemColumns = 'id,restaurant_id,name,description,price,image,veg,category,recommended,created_at,free_delivery,dietary_labels,spice_level,delivery_fee,preparation_time_minutes,available,discount_type,discount_percentage,discount_amount';
-const orderListColumns = 'id,order_number,restaurant_id,customer_clerk_user_id,status,subtotal,delivery_fee,taxes,discount,total,payment_status,created_at,updated_at,restaurants:restaurant_id(name),deliveries:order_id(status,delivery_partner_id,assigned_at,picked_up_at,delivered_at,created_at,updated_at,delivery_partners:delivery_partner_id(full_name,status))';
+const orderListColumns = 'id,order_number,restaurant_id,customer_clerk_user_id,status,subtotal,delivery_fee,taxes,discount,total,payment_status,created_at,updated_at,restaurants:restaurant_id(name),deliveries(status,delivery_partner_id,assigned_at,picked_up_at,delivered_at,created_at,updated_at,delivery_partners:delivery_partner_id(full_name,status))';
 const orderDetailColumns = `${orderListColumns},estimated_delivery,delivery_recipient_name,delivery_address,delivery_landmark,delivery_city,delivery_state,delivery_country,delivery_postal_code,delivery_phone,delivery_latitude,delivery_longitude,order_items(id,menu_item_id,name,quantity,price,selected_addons,created_at)`;
 
 function parseRestaurantId(value: string) {
@@ -321,12 +323,39 @@ function relationValue(value: unknown): Record<string, any> | null {
   return value && typeof value === 'object' ? value as Record<string, any> : null;
 }
 
-function maskedCustomerIdentifier(value: unknown) {
-  const identifier = typeof value === 'string' ? value.trim() : '';
-  return identifier ? `customer-${identifier.slice(-6)}` : null;
+const customerNameCache = new Map<string, string>();
+
+function customerDisplayName(user: Record<string, any>) {
+  const firstName = typeof user.firstName === 'string' ? user.firstName.trim() : '';
+  const lastName = typeof user.lastName === 'string' ? user.lastName.trim() : '';
+  const combined = `${firstName} ${lastName}`.trim();
+  if (combined) return combined;
+  if (typeof user.fullName === 'string' && user.fullName.trim()) return user.fullName.trim();
+  const metadataName = user.unsafeMetadata?.fullName;
+  if (typeof metadataName === 'string' && metadataName.trim()) return metadataName.trim();
+  return 'Customer';
 }
 
-function safeOrderSummary(row: Record<string, any>) {
+async function resolveCustomerNames(rows: Array<Record<string, any>>) {
+  const customerIds = [...new Set(rows.map((row) => typeof row.customer_clerk_user_id === 'string' ? row.customer_clerk_user_id.trim() : '').filter(Boolean))]
+    .slice(0, pageSizeLimit);
+  const unresolvedIds = customerIds.filter((id) => !customerNameCache.has(id));
+  if (unresolvedIds.length) {
+    try {
+      const result = await clerkClient.users.getUserList({ userId: unresolvedIds });
+      const usersById = new Map(result.data.map((user) => [user.id, user]));
+      for (const customerId of unresolvedIds) {
+        customerNameCache.set(customerId, customerDisplayName(usersById.get(customerId) ?? {}));
+      }
+    } catch (error) {
+      console.error('admin-api customer profile batch lookup failed', error instanceof Error ? error.message : 'unknown error');
+      for (const customerId of unresolvedIds) customerNameCache.set(customerId, 'Customer');
+    }
+  }
+  return new Map(customerIds.map((id) => [id, customerNameCache.get(id) ?? 'Customer']));
+}
+
+function safeOrderSummary(row: Record<string, any>, customerName: string) {
   const restaurant = relationValue(row.restaurants);
   const delivery = relationValue(row.deliveries);
   const partner = delivery ? relationValue(delivery.delivery_partners) : null;
@@ -338,7 +367,7 @@ function safeOrderSummary(row: Record<string, any>) {
     status: row.status,
     restaurantId: row.restaurant_id,
     restaurantName: restaurant?.name ?? null,
-    customerIdentifier: maskedCustomerIdentifier(row.customer_clerk_user_id),
+    customerName,
     subtotal: row.subtotal,
     taxes: row.taxes,
     discount: row.discount,
@@ -394,7 +423,8 @@ async function listOrders(url: URL) {
   if (to) query = query.lte('created_at', to);
   const { data, count, error } = await query;
   if (error) throw error;
-  return safePage((data ?? []).map((row) => safeOrderSummary(row)), count, pagination.page, pagination.pageSize);
+  const customerNames = await resolveCustomerNames(data ?? []);
+  return safePage((data ?? []).map((row) => safeOrderSummary(row, customerNames.get(row.customer_clerk_user_id) ?? 'Customer')), count, pagination.page, pagination.pageSize);
 }
 
 async function getOrder(id: string) {
@@ -402,7 +432,8 @@ async function getOrder(id: string) {
   const { data, error } = await supabaseAdmin.from('orders').select(orderDetailColumns).eq('id', orderId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  const summary = safeOrderSummary(data);
+  const customerNames = await resolveCustomerNames([data]);
+  const summary = safeOrderSummary(data, customerNames.get(data.customer_clerk_user_id) ?? 'Customer');
   const restaurant = relationValue(data.restaurants);
   const delivery = relationValue(data.deliveries);
   const partner = delivery ? relationValue(delivery.delivery_partners) : null;
