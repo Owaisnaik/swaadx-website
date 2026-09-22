@@ -80,6 +80,8 @@
     getOrder: function (id) { return request('/orders/' + encodeURIComponent(id)); },
     getPayments: function (query) { return request('/payments' + (query ? '?' + query : '')); },
     getPayment: function (id) { return request('/payments/' + encodeURIComponent(id)); },
+    getEarnings: function (query) { return request('/earnings' + (query ? '?' + query : '')); },
+    getEarning: function (id) { return request('/earnings/' + encodeURIComponent(id)); },
     changeRestaurantLifecycle: function (id, action, reason) {
       return request('/restaurants/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
         method: 'POST',

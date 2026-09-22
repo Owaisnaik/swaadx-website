@@ -84,6 +84,7 @@ const menuItemColumns = 'id,restaurant_id,name,description,price,image,veg,categ
 const orderListColumns = 'id,order_number,restaurant_id,customer_clerk_user_id,status,subtotal,delivery_fee,taxes,discount,total,payment_status,created_at,updated_at,restaurants:restaurant_id(name),deliveries(status,delivery_partner_id,assigned_at,picked_up_at,delivered_at,created_at,updated_at,delivery_partners:delivery_partner_id(full_name,status))';
 const orderDetailColumns = `${orderListColumns},estimated_delivery,delivery_recipient_name,delivery_address,delivery_landmark,delivery_city,delivery_state,delivery_country,delivery_postal_code,delivery_phone,delivery_latitude,delivery_longitude,order_items(id,menu_item_id,name,quantity,price,selected_addons,created_at)`;
 const paymentColumns = 'id,order_id,payment_status,cashfree_order_id,cashfree_payment_session_id,payment_reference,created_at,updated_at,orders!inner(id,order_number,customer_clerk_user_id,restaurant_id,status,total,payment_amount,payment_currency,restaurants:restaurant_id(name))';
+const earningColumns = 'id,delivery_id,delivery_partner_id,amount,status,created_at,deliveries!delivery_earnings_delivery_id_fkey(order_id,status,delivered_at,created_at,updated_at,orders!inner(order_number,restaurant_id,restaurants:restaurant_id(name))),delivery_partners!inner(full_name,status)';
 
 function parseRestaurantId(value: string) {
   return parseUuid(value, 'Invalid restaurant ID.');
@@ -561,6 +562,74 @@ async function getPayment(id: string) {
   };
 }
 
+function parseEarningDate(value: string | null, field: string) {
+  if (!value) return null;
+  if (field === 'end date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) value += 'T23:59:59.999Z';
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) throw new Error(`Invalid earning ${field}.`);
+  return new Date(parsed).toISOString();
+}
+
+function parseEarningFilter(value: string | null, field: string) {
+  const normalized = value?.trim() ?? '';
+  if (normalized.length > 100 || (normalized && !/^[a-zA-Z0-9_ -]+$/.test(normalized))) {
+    throw new Error(`Invalid earning ${field}.`);
+  }
+  return normalized || null;
+}
+
+function safeEarning(row: Record<string, any>) {
+  const delivery = relationValue(row.deliveries);
+  const order = delivery ? relationValue(delivery.orders) : null;
+  const restaurant = order ? relationValue(order.restaurants) : null;
+  const partner = relationValue(row.delivery_partners);
+  return {
+    id: row.id,
+    deliveryId: row.delivery_id,
+    orderNumber: order?.order_number ?? null,
+    restaurantName: restaurant?.name ?? null,
+    deliveryPartner: partner ? { name: partner.full_name, status: partner.status } : null,
+    amount: row.amount,
+    status: row.status,
+    createdAt: row.created_at,
+    deliveryStatus: delivery?.status ?? null,
+    deliveredAt: delivery?.delivered_at ?? null,
+  };
+}
+
+async function listEarnings(url: URL) {
+  const pagination = parsePage(url);
+  const search = url.searchParams.get('search')?.trim().replace(/[%(),]/g, '');
+  const partnerId = url.searchParams.get('deliveryPartnerId')?.trim() || null;
+  const restaurantId = url.searchParams.get('restaurantId')?.trim() || null;
+  const status = parseEarningFilter(url.searchParams.get('status'), 'status');
+  const from = parseEarningDate(url.searchParams.get('from'), 'start date');
+  const to = parseEarningDate(url.searchParams.get('to'), 'end date');
+  if (partnerId) parseUuid(partnerId, 'Invalid earning delivery partner ID.');
+  if (restaurantId) parseUuid(restaurantId, 'Invalid earning restaurant ID.');
+  if (from && to && from > to) throw new Error('Invalid earning date range.');
+
+  let query = supabaseAdmin.from('delivery_earnings').select(earningColumns, { count: 'exact' })
+    .order('created_at', { ascending: false }).order('id', { ascending: false })
+    .range(pagination.from, pagination.to);
+  if (search) query = query.ilike('deliveries.orders.order_number', `%${search}%`);
+  if (partnerId) query = query.eq('delivery_partner_id', partnerId);
+  if (restaurantId) query = query.eq('deliveries.orders.restaurant_id', restaurantId);
+  if (status) query = query.eq('status', status);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
+  const { data, count, error } = await query;
+  if (error) throw error;
+  return safePage((data ?? []).map((row) => safeEarning(row)), count, pagination.page, pagination.pageSize);
+}
+
+async function getEarning(id: string) {
+  const earningId = parseUuid(id, 'Invalid earning ID.');
+  const { data, error } = await supabaseAdmin.from('delivery_earnings').select(earningColumns).eq('id', earningId).maybeSingle();
+  if (error) throw error;
+  return data ? safeEarning(data) : null;
+}
+
 async function listPartners(url: URL) {
   const pagination = parsePage(url);
   const status = url.searchParams.get('status');
@@ -953,6 +1022,12 @@ Deno.serve(async (request: Request): Promise<Response> => {
       return payment ? adminResponse({ data: payment }, 200) : adminResponse({ error: { message: 'Payment attempt not found.' } }, 404);
     }
     if (path.endsWith('/payments')) return adminResponse({ data: await listPayments(url) }, 200);
+    const earningMatch = path.match(/\/earnings\/([^/]+)$/);
+    if (earningMatch) {
+      const earning = await getEarning(earningMatch[1]);
+      return earning ? adminResponse({ data: earning }, 200) : adminResponse({ error: { message: 'Earning not found.' } }, 404);
+    }
+    if (path.endsWith('/earnings')) return adminResponse({ data: await listEarnings(url) }, 200);
     if (path.endsWith('/restaurants/applications')) {
       return adminResponse({ data: { supported: false, reason: 'Restaurant applications are not represented in the current database schema.' } }, 200);
     }
@@ -993,11 +1068,11 @@ Deno.serve(async (request: Request): Promise<Response> => {
       if (subresource === 'payouts') return adminResponse({ data: await listPayouts(partnerMatch[1], url) }, 200);
     }
   } catch (error) {
-    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.', 'Invalid order status.', 'Invalid order payment status.', 'Invalid order restaurant ID.', 'Invalid order start date.', 'Invalid order end date.', 'Invalid order date range.', 'Invalid order ID.', 'Invalid payment status.', 'Invalid payment restaurant ID.', 'Invalid payment start date.', 'Invalid payment end date.', 'Invalid payment date range.', 'Invalid payment ID.'].includes(error.message)) {
+    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.', 'Invalid order status.', 'Invalid order payment status.', 'Invalid order restaurant ID.', 'Invalid order start date.', 'Invalid order end date.', 'Invalid order date range.', 'Invalid order ID.', 'Invalid payment status.', 'Invalid payment restaurant ID.', 'Invalid payment start date.', 'Invalid payment end date.', 'Invalid payment date range.', 'Invalid payment ID.', 'Invalid earning status.', 'Invalid earning delivery partner ID.', 'Invalid earning restaurant ID.', 'Invalid earning start date.', 'Invalid earning end date.', 'Invalid earning date range.', 'Invalid earning ID.'].includes(error.message)) {
       return adminResponse({ error: { message: error.message } }, 400);
     }
     console.error('admin-api read failed', error instanceof Error ? error.message : 'unknown error');
-    return adminResponse({ error: { message: path.includes('/orders') ? 'Unable to load order data.' : path.includes('/payments') ? 'Unable to load payment data.' : 'Unable to load admin data.' } }, 500);
+    return adminResponse({ error: { message: path.includes('/orders') ? 'Unable to load order data.' : path.includes('/payments') ? 'Unable to load payment data.' : path.includes('/earnings') ? 'Unable to load earnings data.' : 'Unable to load admin data.' } }, 500);
   }
   if (!path.endsWith('/dashboard-summary')) return adminResponse({ error: { message: 'Not found.' } }, 404);
 
