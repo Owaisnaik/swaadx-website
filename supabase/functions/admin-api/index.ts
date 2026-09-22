@@ -79,6 +79,8 @@ function safePage<T>(rows: T[], count: number | null, page: number, pageSize: nu
 
 const restaurantColumns = 'id,name,description,address,phone,created_at,cuisine,city,state,country,postal_code,landmark,latitude,longitude,is_available,lifecycle_status,archived_at,archived_by_admin_id,archive_reason,opening_hours,delivery_radius_km,preparation_time_minutes,cover_image';
 const menuItemColumns = 'id,restaurant_id,name,description,price,image,veg,category,recommended,created_at,free_delivery,dietary_labels,spice_level,delivery_fee,preparation_time_minutes,available,discount_type,discount_percentage,discount_amount';
+const orderListColumns = 'id,order_number,restaurant_id,customer_clerk_user_id,status,subtotal,delivery_fee,taxes,discount,total,payment_status,created_at,updated_at,restaurants:restaurant_id(name),deliveries:order_id(status,delivery_partner_id,assigned_at,picked_up_at,delivered_at,created_at,updated_at,delivery_partners:delivery_partner_id(full_name,status))';
+const orderDetailColumns = `${orderListColumns},estimated_delivery,delivery_recipient_name,delivery_address,delivery_landmark,delivery_city,delivery_state,delivery_country,delivery_postal_code,delivery_phone,delivery_latitude,delivery_longitude,order_items(id,menu_item_id,name,quantity,price,selected_addons,created_at)`;
 
 function parseRestaurantId(value: string) {
   return parseUuid(value, 'Invalid restaurant ID.');
@@ -312,6 +314,134 @@ async function listRestaurantModeration(url: URL) {
     menuItemCount: Array.isArray(row.menu_items) ? row.menu_items[0]?.count ?? 0 : 0,
     reviewCount: Array.isArray(row.restaurant_reviews) ? row.restaurant_reviews[0]?.count ?? 0 : 0,
   })), count, pagination.page, pagination.pageSize);
+}
+
+function relationValue(value: unknown): Record<string, any> | null {
+  if (Array.isArray(value)) return (value[0] as Record<string, any> | undefined) ?? null;
+  return value && typeof value === 'object' ? value as Record<string, any> : null;
+}
+
+function maskedCustomerIdentifier(value: unknown) {
+  const identifier = typeof value === 'string' ? value.trim() : '';
+  return identifier ? `customer-${identifier.slice(-6)}` : null;
+}
+
+function safeOrderSummary(row: Record<string, any>) {
+  const restaurant = relationValue(row.restaurants);
+  const delivery = relationValue(row.deliveries);
+  const partner = delivery ? relationValue(delivery.delivery_partners) : null;
+  return {
+    id: row.id,
+    orderNumber: row.order_number,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    status: row.status,
+    restaurantId: row.restaurant_id,
+    restaurantName: restaurant?.name ?? null,
+    customerIdentifier: maskedCustomerIdentifier(row.customer_clerk_user_id),
+    subtotal: row.subtotal,
+    taxes: row.taxes,
+    discount: row.discount,
+    deliveryFee: row.delivery_fee,
+    totalAmount: row.total,
+    paymentStatus: row.payment_status,
+    deliveryStatus: delivery?.status ?? null,
+    deliveryPartner: partner ? { name: partner.full_name, status: partner.status } : null,
+    deliveryTimestamps: delivery ? {
+      assignedAt: delivery.assigned_at,
+      pickedUpAt: delivery.picked_up_at,
+      deliveredAt: delivery.delivered_at,
+      updatedAt: delivery.updated_at,
+    } : null,
+  };
+}
+
+function parseOrderDate(value: string | null, field: string) {
+  if (!value) return null;
+  if (field === 'end date' && /^\d{4}-\d{2}-\d{2}$/.test(value)) value += 'T23:59:59.999Z';
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) throw new Error(`Invalid order ${field}.`);
+  return new Date(parsed).toISOString();
+}
+
+function parseOrderFilter(value: string | null, field: string) {
+  const normalized = value?.trim() ?? '';
+  if (normalized.length > 100 || (normalized && !/^[a-zA-Z0-9_ -]+$/.test(normalized))) {
+    throw new Error(`Invalid order ${field}.`);
+  }
+  return normalized || null;
+}
+
+async function listOrders(url: URL) {
+  const pagination = parsePage(url);
+  const search = url.searchParams.get('search')?.trim().replace(/[%(),]/g, '');
+  const status = parseOrderFilter(url.searchParams.get('status'), 'status');
+  const paymentStatus = parseOrderFilter(url.searchParams.get('paymentStatus'), 'payment status');
+  const restaurantId = url.searchParams.get('restaurantId')?.trim() || null;
+  const from = parseOrderDate(url.searchParams.get('from'), 'start date');
+  const to = parseOrderDate(url.searchParams.get('to'), 'end date');
+  if (restaurantId) parseUuid(restaurantId, 'Invalid order restaurant ID.');
+  if (from && to && from > to) throw new Error('Invalid order date range.');
+
+  let query = supabaseAdmin.from('orders').select(orderListColumns, { count: 'exact' })
+    .order('created_at', { ascending: false }).order('id', { ascending: false })
+    .range(pagination.from, pagination.to);
+  if (search) query = query.ilike('order_number', `%${search}%`);
+  if (status) query = query.eq('status', status);
+  if (paymentStatus) query = query.eq('payment_status', paymentStatus);
+  if (restaurantId) query = query.eq('restaurant_id', restaurantId);
+  if (from) query = query.gte('created_at', from);
+  if (to) query = query.lte('created_at', to);
+  const { data, count, error } = await query;
+  if (error) throw error;
+  return safePage((data ?? []).map((row) => safeOrderSummary(row)), count, pagination.page, pagination.pageSize);
+}
+
+async function getOrder(id: string) {
+  const orderId = parseUuid(id, 'Invalid order ID.');
+  const { data, error } = await supabaseAdmin.from('orders').select(orderDetailColumns).eq('id', orderId).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  const summary = safeOrderSummary(data);
+  const restaurant = relationValue(data.restaurants);
+  const delivery = relationValue(data.deliveries);
+  const partner = delivery ? relationValue(delivery.delivery_partners) : null;
+  return {
+    ...summary,
+    estimatedDelivery: data.estimated_delivery,
+    restaurant: restaurant ? { id: data.restaurant_id, name: restaurant.name } : { id: data.restaurant_id, name: null },
+    pricing: { subtotal: data.subtotal, taxes: data.taxes, discount: data.discount, deliveryFee: data.delivery_fee, total: data.total },
+    deliveryAddress: {
+      recipientName: data.delivery_recipient_name,
+      address: data.delivery_address,
+      landmark: data.delivery_landmark,
+      city: data.delivery_city,
+      state: data.delivery_state,
+      country: data.delivery_country,
+      postalCode: data.delivery_postal_code,
+      phone: data.delivery_phone,
+      latitude: data.delivery_latitude,
+      longitude: data.delivery_longitude,
+    },
+    delivery: delivery ? {
+      status: delivery.status,
+      partner: partner ? { name: partner.full_name, status: partner.status } : null,
+      assignedAt: delivery.assigned_at,
+      pickedUpAt: delivery.picked_up_at,
+      deliveredAt: delivery.delivered_at,
+      createdAt: delivery.created_at,
+      updatedAt: delivery.updated_at,
+    } : null,
+    items: (Array.isArray(data.order_items) ? data.order_items : []).map((item: Record<string, any>) => ({
+      id: item.id,
+      menuItemId: item.menu_item_id,
+      name: item.name,
+      quantity: item.quantity,
+      price: item.price,
+      selectedAddons: item.selected_addons ?? [],
+      createdAt: item.created_at,
+    })),
+  };
 }
 
 async function listPartners(url: URL) {
@@ -694,6 +824,12 @@ Deno.serve(async (request: Request): Promise<Response> => {
       return adminResponse({ error: { message: 'Method not allowed.' } }, 405);
     }
     if (path.endsWith('/audit')) return adminResponse({ data: await listAuditLogs(url) }, 200);
+    const orderMatch = path.match(/\/orders\/([^/]+)$/);
+    if (orderMatch) {
+      const order = await getOrder(orderMatch[1]);
+      return order ? adminResponse({ data: order }, 200) : adminResponse({ error: { message: 'Order not found.' } }, 404);
+    }
+    if (path.endsWith('/orders')) return adminResponse({ data: await listOrders(url) }, 200);
     if (path.endsWith('/restaurants/applications')) {
       return adminResponse({ data: { supported: false, reason: 'Restaurant applications are not represented in the current database schema.' } }, 200);
     }
@@ -734,11 +870,11 @@ Deno.serve(async (request: Request): Promise<Response> => {
       if (subresource === 'payouts') return adminResponse({ data: await listPayouts(partnerMatch[1], url) }, 200);
     }
   } catch (error) {
-    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.'].includes(error.message)) {
+    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.', 'Invalid order status.', 'Invalid order payment status.', 'Invalid order restaurant ID.', 'Invalid order start date.', 'Invalid order end date.', 'Invalid order date range.', 'Invalid order ID.'].includes(error.message)) {
       return adminResponse({ error: { message: error.message } }, 400);
     }
-    console.error('admin-api delivery partner read failed', error instanceof Error ? error.message : 'unknown error');
-    return adminResponse({ error: { message: 'Unable to load delivery partner data.' } }, 500);
+    console.error('admin-api read failed', error instanceof Error ? error.message : 'unknown error');
+    return adminResponse({ error: { message: path.includes('/orders') ? 'Unable to load order data.' : 'Unable to load admin data.' } }, 500);
   }
   if (!path.endsWith('/dashboard-summary')) return adminResponse({ error: { message: 'Not found.' } }, 404);
 

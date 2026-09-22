@@ -76,6 +76,8 @@
     getRestaurantModeration: function (query) { return request('/restaurants/moderation' + (query ? '?' + query : '')); },
     getRestaurantApplications: function () { return request('/restaurants/applications'); },
     getSuspendedRestaurants: function () { return request('/restaurants/suspended'); },
+    getOrders: function (query) { return request('/orders' + (query ? '?' + query : '')); },
+    getOrder: function (id) { return request('/orders/' + encodeURIComponent(id)); },
     changeRestaurantLifecycle: function (id, action, reason) {
       return request('/restaurants/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
         method: 'POST',
