@@ -77,6 +77,243 @@ function safePage<T>(rows: T[], count: number | null, page: number, pageSize: nu
   return { items: rows, page, pageSize, total: count ?? rows.length, totalPages: Math.ceil((count ?? rows.length) / pageSize) };
 }
 
+const restaurantColumns = 'id,name,description,address,phone,created_at,cuisine,city,state,country,postal_code,landmark,latitude,longitude,is_available,lifecycle_status,archived_at,archived_by_admin_id,archive_reason,opening_hours,delivery_radius_km,preparation_time_minutes,cover_image';
+const menuItemColumns = 'id,restaurant_id,name,description,price,image,veg,category,recommended,created_at,free_delivery,dietary_labels,spice_level,delivery_fee,preparation_time_minutes,available,discount_type,discount_percentage,discount_amount';
+
+function parseRestaurantId(value: string) {
+  return parseUuid(value, 'Invalid restaurant ID.');
+}
+
+function parseRestaurantMenuPage(url: URL) {
+  const page = Number(url.searchParams.get('menuPage') ?? '1');
+  const pageSize = Number(url.searchParams.get('menuPageSize') ?? String(pageSizeLimit));
+  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > pageSizeLimit) {
+    throw new Error('Invalid restaurant menu pagination.');
+  }
+  return { page, pageSize, from: (page - 1) * pageSize, to: page * pageSize - 1 };
+}
+
+function parseRestaurantReviewPage(url: URL) {
+  const page = Number(url.searchParams.get('reviewPage') ?? '1');
+  const pageSize = Number(url.searchParams.get('reviewPageSize') ?? String(pageSizeLimit));
+  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > pageSizeLimit) {
+    throw new Error('Invalid restaurant review pagination.');
+  }
+  return { page, pageSize, from: (page - 1) * pageSize, to: page * pageSize - 1 };
+}
+
+function safeRestaurant(row: Record<string, any>) {
+  return {
+    id: row.id, name: row.name, description: row.description, address: row.address, phone: row.phone,
+    createdAt: row.created_at, cuisine: row.cuisine, city: row.city, state: row.state, country: row.country,
+    postalCode: row.postal_code, landmark: row.landmark, latitude: row.latitude, longitude: row.longitude,
+    isAvailable: row.is_available, lifecycleStatus: row.lifecycle_status, archivedAt: row.archived_at,
+    archiveReason: row.archive_reason, openingHours: row.opening_hours, deliveryRadiusKm: row.delivery_radius_km,
+    preparationTimeMinutes: row.preparation_time_minutes, coverImage: row.cover_image,
+  };
+}
+
+function safeMenuItem(row: Record<string, any>) {
+  return {
+    id: row.id, restaurantId: row.restaurant_id, name: row.name, description: row.description,
+    price: row.price, image: row.image, vegetarian: row.veg, category: row.category,
+    recommended: row.recommended, createdAt: row.created_at, freeDelivery: row.free_delivery,
+    dietaryLabels: row.dietary_labels, spiceLevel: row.spice_level, deliveryFee: row.delivery_fee,
+    preparationTimeMinutes: row.preparation_time_minutes, available: row.available,
+    discountType: row.discount_type, discountPercentage: row.discount_percentage, discountAmount: row.discount_amount,
+  };
+}
+
+function safeRestaurantReview(row: Record<string, any>) {
+  return { id: row.id, restaurantId: row.restaurant_id, orderId: row.order_id, rating: row.rating, reviewText: row.review_text, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+async function listRestaurants(url: URL) {
+  const pagination = parsePage(url);
+  const search = url.searchParams.get('search')?.trim().replace(/[%(),]/g, '');
+  const availability = url.searchParams.get('availability');
+  const lifecycle = url.searchParams.get('lifecycle');
+  if (availability && !['available', 'unavailable'].includes(availability)) throw new Error('Invalid restaurant availability.');
+  if (lifecycle && !['active', 'archived'].includes(lifecycle)) throw new Error('Invalid restaurant lifecycle.');
+  let query = supabaseAdmin.from('restaurants').select(restaurantColumns, { count: 'exact' })
+    .order('created_at', { ascending: false }).order('id', { ascending: false }).range(pagination.from, pagination.to);
+  if (availability) query = query.eq('is_available', availability === 'available');
+  if (lifecycle) query = query.eq('lifecycle_status', lifecycle);
+  if (search) query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,address.ilike.%${search}%,city.ilike.%${search}%,cuisine.ilike.%${search}%`);
+  const { data, count, error } = await query;
+  if (error) throw error;
+  return safePage((data ?? []).map((row) => safeRestaurant(row)), count, pagination.page, pagination.pageSize);
+}
+
+function parseBoundedReason(body: unknown) {
+  if (!body || typeof body !== 'object' || !('reason' in body)) return null;
+  if (typeof body.reason !== 'string' || body.reason.length > 500) throw new Error('Invalid restaurant archive reason.');
+  return body.reason.trim() || null;
+}
+
+async function readOptionalReason(request: Request) {
+  if (!request.headers.get('content-type')?.includes('application/json')) return null;
+  try {
+    return parseBoundedReason(await request.json());
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Invalid restaurant archive reason.') throw error;
+    throw new Error('Invalid restaurant archive reason.');
+  }
+}
+
+async function changeRestaurantLifecycle(id: string, action: string, adminClerkUserId: string, requestId: string, request: Request) {
+  const restaurantId = parseRestaurantId(id);
+  if (!['archive', 'reactivate'].includes(action)) throw new Error('Invalid restaurant lifecycle action.');
+  const reason = action === 'archive' ? await readOptionalReason(request) : null;
+  const { data: current, error: currentError } = await supabaseAdmin.from('restaurants')
+    .select('id,name,lifecycle_status,archived_at,archived_by_admin_id,archive_reason')
+    .eq('id', restaurantId).maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) return null;
+  const nextStatus = action === 'archive' ? 'archived' : 'active';
+  if (current.lifecycle_status === nextStatus) return { conflict: true, current: { id: current.id, lifecycleStatus: current.lifecycle_status } };
+  const now = new Date().toISOString();
+  const update = action === 'archive'
+    ? { lifecycle_status: 'archived', archived_at: now, archived_by_admin_id: adminClerkUserId, archive_reason: reason }
+    : { lifecycle_status: 'active', archived_at: null, archived_by_admin_id: null, archive_reason: null };
+  const { data: updated, error: updateError } = await supabaseAdmin.from('restaurants')
+    .update(update).eq('id', restaurantId).eq('lifecycle_status', current.lifecycle_status)
+    .select('id,name,lifecycle_status,archived_at,archived_by_admin_id,archive_reason').maybeSingle();
+  if (updateError) throw updateError;
+  if (!updated) return { conflict: true, current: { id: current.id, lifecycleStatus: current.lifecycle_status } };
+  try {
+    await recordAdminAuditEvent({
+      adminClerkUserId, action: action === 'archive' ? 'restaurant_archived' : 'restaurant_reactivated',
+      resourceType: 'restaurant', resourceId: restaurantId,
+      previousState: { lifecycleStatus: current.lifecycle_status, archivedAt: current.archived_at, archiveReason: current.archive_reason },
+      newState: { lifecycleStatus: updated.lifecycle_status, archivedAt: updated.archived_at, archiveReason: updated.archive_reason },
+      reason, requestId,
+    });
+  } catch (auditError) {
+    let rollbackQuery = supabaseAdmin.from('restaurants').update({
+      lifecycle_status: current.lifecycle_status, archived_at: current.archived_at,
+      archived_by_admin_id: current.archived_by_admin_id, archive_reason: current.archive_reason,
+    }).eq('id', restaurantId).eq('lifecycle_status', updated.lifecycle_status);
+    rollbackQuery = updated.archived_at
+      ? rollbackQuery.eq('archived_at', updated.archived_at)
+      : rollbackQuery.is('archived_at', null);
+    const { error: rollbackError } = await rollbackQuery;
+    if (rollbackError) console.error('admin-api restaurant lifecycle rollback failed after audit failure', rollbackError.message);
+    console.error('admin-api restaurant lifecycle audit failed', auditError instanceof Error ? auditError.message : 'unknown error');
+    throw new Error('Restaurant lifecycle change could not be completed.');
+  }
+  return { id: updated.id, name: updated.name, lifecycleStatus: updated.lifecycle_status, previousLifecycleStatus: current.lifecycle_status };
+}
+
+async function changeMenuItemAvailability(restaurantIdValue: string, menuItemIdValue: string, action: string, adminClerkUserId: string, requestId: string) {
+  const restaurantId = parseRestaurantId(restaurantIdValue);
+  const menuItemId = parseUuid(menuItemIdValue, 'Invalid menu item ID.');
+  if (!['deactivate', 'reactivate'].includes(action)) throw new Error('Invalid menu item action.');
+  const { data: current, error: currentError } = await supabaseAdmin.from('menu_items')
+    .select('id,restaurant_id,name,available').eq('id', menuItemId).eq('restaurant_id', restaurantId).maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) return null;
+  const nextAvailable = action === 'reactivate';
+  if (current.available === nextAvailable) return { conflict: true, current: { id: current.id, available: current.available } };
+  const { data: updated, error: updateError } = await supabaseAdmin.from('menu_items')
+    .update({ available: nextAvailable }).eq('id', menuItemId).eq('restaurant_id', restaurantId).eq('available', current.available)
+    .select('id,restaurant_id,name,available').maybeSingle();
+  if (updateError) throw updateError;
+  if (!updated) return { conflict: true, current: { id: current.id, available: current.available } };
+  try {
+    await recordAdminAuditEvent({
+      adminClerkUserId, action: action === 'deactivate' ? 'menu_item_deactivated' : 'menu_item_reactivated',
+      resourceType: 'menu_item', resourceId: menuItemId,
+      previousState: { restaurantId, available: current.available },
+      newState: { restaurantId, available: updated.available }, requestId,
+      metadata: { restaurantId, menuItemId },
+    });
+  } catch (auditError) {
+    const { error: rollbackError } = await supabaseAdmin.from('menu_items').update({ available: current.available })
+      .eq('id', menuItemId).eq('restaurant_id', restaurantId).eq('available', updated.available);
+    if (rollbackError) console.error('admin-api menu item availability rollback failed after audit failure', rollbackError.message);
+    console.error('admin-api menu item availability audit failed', auditError instanceof Error ? auditError.message : 'unknown error');
+    throw new Error('Menu item availability change could not be completed.');
+  }
+  return { id: updated.id, restaurantId: updated.restaurant_id, name: updated.name, available: updated.available };
+}
+
+async function listRestaurantMenus(url: URL) {
+  const pagination = parsePage(url);
+  const search = url.searchParams.get('search')?.trim().replace(/[%(),]/g, '');
+  let query = supabaseAdmin.from('restaurants').select('id,name,created_at,is_available,lifecycle_status', { count: 'exact' })
+    .order('name', { ascending: true }).order('id', { ascending: true }).range(pagination.from, pagination.to);
+  if (search) query = query.ilike('name', `%${search}%`);
+  const { data: restaurants, count, error } = await query;
+  if (error) throw error;
+  const ids = (restaurants ?? []).map((row) => row.id);
+  const { data: items, error: itemsError } = ids.length
+    ? await supabaseAdmin.from('menu_items').select('id,restaurant_id,available').in('restaurant_id', ids)
+    : { data: [], error: null };
+  if (itemsError) throw itemsError;
+  const itemsByRestaurant = new Map<string, { total: number; available: number }>();
+  for (const item of items ?? []) {
+    const summary = itemsByRestaurant.get(item.restaurant_id) ?? { total: 0, available: 0 };
+    summary.total += 1;
+    if (item.available) summary.available += 1;
+    itemsByRestaurant.set(item.restaurant_id, summary);
+  }
+  return safePage((restaurants ?? []).map((row) => {
+    const summary = itemsByRestaurant.get(row.id) ?? { total: 0, available: 0 };
+    return { id: row.id, name: row.name, createdAt: row.created_at, isAvailable: row.is_available, lifecycleStatus: row.lifecycle_status, menuItemCount: summary.total, availableItemCount: summary.available };
+  }), count, pagination.page, pagination.pageSize);
+}
+
+async function getRestaurant(id: string, url: URL) {
+  const restaurantId = parseRestaurantId(id);
+  const menuPagination = parseRestaurantMenuPage(url);
+  const reviewPagination = parseRestaurantReviewPage(url);
+  const { data: restaurant, error } = await supabaseAdmin.from('restaurants').select(restaurantColumns).eq('id', restaurantId).maybeSingle();
+  if (error) throw error;
+  if (!restaurant) return null;
+  const [{ data: menuItems, error: menuError }, { count: menuItemCount, error: menuCountError }, { data: reviews, error: reviewError }, { count: reviewCount, error: reviewCountError }] = await Promise.all([
+    supabaseAdmin.from('menu_items').select(menuItemColumns).eq('restaurant_id', restaurantId).order('category', { ascending: true }).order('name', { ascending: true }).range(menuPagination.from, menuPagination.to),
+    supabaseAdmin.from('menu_items').select('id', { count: 'exact', head: true }).eq('restaurant_id', restaurantId),
+    supabaseAdmin.from('restaurant_reviews').select('id,restaurant_id,order_id,rating,review_text,created_at,updated_at').eq('restaurant_id', restaurantId).order('created_at', { ascending: false }).range(reviewPagination.from, reviewPagination.to),
+    supabaseAdmin.from('restaurant_reviews').select('id', { count: 'exact', head: true }).eq('restaurant_id', restaurantId),
+  ]);
+  if (menuError) throw menuError;
+  if (menuCountError) throw menuCountError;
+  if (reviewError) throw reviewError;
+  if (reviewCountError) throw reviewCountError;
+  return {
+    ...safeRestaurant(restaurant),
+    menuItems: (menuItems ?? []).map((row) => safeMenuItem(row)),
+    reviews: (reviews ?? []).map((row) => safeRestaurantReview(row)),
+    menuItemCount: menuItemCount ?? 0,
+    menuPage: menuPagination.page,
+    menuPageSize: menuPagination.pageSize,
+    menuTotalPages: Math.ceil((menuItemCount ?? 0) / menuPagination.pageSize),
+    menuHasMore: menuPagination.page < Math.ceil((menuItemCount ?? 0) / menuPagination.pageSize),
+    reviewCount: reviewCount ?? 0,
+    reviewPage: reviewPagination.page,
+    reviewPageSize: reviewPagination.pageSize,
+    reviewTotalPages: Math.ceil((reviewCount ?? 0) / reviewPagination.pageSize),
+    reviewHasMore: reviewPagination.page < Math.ceil((reviewCount ?? 0) / reviewPagination.pageSize),
+  };
+}
+
+async function listRestaurantModeration(url: URL) {
+  const pagination = parsePage(url);
+  const search = url.searchParams.get('search')?.trim().replace(/[%(),]/g, '');
+  let query = supabaseAdmin.from('restaurants').select('id,name,description,cover_image,created_at,is_available,menu_items(count),restaurant_reviews(count)', { count: 'exact' })
+    .order('created_at', { ascending: false }).order('id', { ascending: false }).range(pagination.from, pagination.to);
+  if (search) query = query.ilike('name', `%${search}%`);
+  const { data: restaurants, count, error } = await query;
+  if (error) throw error;
+  return safePage((restaurants ?? []).map((row) => ({
+    id: row.id, name: row.name, description: row.description, coverImage: row.cover_image,
+    createdAt: row.created_at, isAvailable: row.is_available,
+    menuItemCount: Array.isArray(row.menu_items) ? row.menu_items[0]?.count ?? 0 : 0,
+    reviewCount: Array.isArray(row.restaurant_reviews) ? row.restaurant_reviews[0]?.count ?? 0 : 0,
+  })), count, pagination.page, pagination.pageSize);
+}
+
 async function listPartners(url: URL) {
   const pagination = parsePage(url);
   const status = url.searchParams.get('status');
@@ -421,6 +658,20 @@ Deno.serve(async (request: Request): Promise<Response> => {
   try {
     const partnerActionMatch = path.match(/\/delivery-partners\/([^/]+)\/(approve|reject|suspend|reactivate)$/);
     if (request.method === 'POST') {
+      const restaurantLifecycleMatch = path.match(/\/restaurants\/([^/]+)\/(archive|reactivate)$/);
+      if (restaurantLifecycleMatch) {
+        const changed = await changeRestaurantLifecycle(restaurantLifecycleMatch[1], restaurantLifecycleMatch[2], auth.clerkUserId, requestId, request);
+        if (!changed) return adminResponse({ error: { message: 'Restaurant not found.' } }, 404);
+        if ('conflict' in changed) return adminResponse({ error: { message: `Restaurant is already ${changed.current?.lifecycleStatus ?? 'in the requested state'}. Refresh before trying again.` } }, 409);
+        return adminResponse({ data: changed }, 200);
+      }
+      const menuItemActionMatch = path.match(/\/restaurants\/([^/]+)\/menu-items\/([^/]+)\/(deactivate|reactivate)$/);
+      if (menuItemActionMatch) {
+        const changed = await changeMenuItemAvailability(menuItemActionMatch[1], menuItemActionMatch[2], menuItemActionMatch[3], auth.clerkUserId, requestId);
+        if (!changed) return adminResponse({ error: { message: 'Menu item not found for this restaurant.' } }, 404);
+        if ('conflict' in changed) return adminResponse({ error: { message: 'Menu item is already in the requested availability state. Refresh before trying again.' } }, 409);
+        return adminResponse({ data: changed }, 200);
+      }
       if (partnerActionMatch) {
         const changed = await changePartnerStatus(partnerActionMatch[1], partnerActionMatch[2], auth.clerkUserId, requestId, request);
         if (!changed) return adminResponse({ error: { message: 'Delivery partner not found.' } }, 404);
@@ -443,6 +694,20 @@ Deno.serve(async (request: Request): Promise<Response> => {
       return adminResponse({ error: { message: 'Method not allowed.' } }, 405);
     }
     if (path.endsWith('/audit')) return adminResponse({ data: await listAuditLogs(url) }, 200);
+    if (path.endsWith('/restaurants/applications')) {
+      return adminResponse({ data: { supported: false, reason: 'Restaurant applications are not represented in the current database schema.' } }, 200);
+    }
+    if (path.endsWith('/restaurants/suspended')) {
+      return adminResponse({ data: { supported: false, reason: 'Restaurant suspension status is not represented in the current database schema.' } }, 200);
+    }
+    if (path.endsWith('/restaurants/menus')) return adminResponse({ data: await listRestaurantMenus(url) }, 200);
+    if (path.endsWith('/restaurants/moderation')) return adminResponse({ data: await listRestaurantModeration(url) }, 200);
+    const restaurantMatch = path.match(/\/restaurants\/([^/]+)$/);
+    if (restaurantMatch) {
+      const restaurant = await getRestaurant(restaurantMatch[1], url);
+      return restaurant ? adminResponse({ data: restaurant }, 200) : adminResponse({ error: { message: 'Restaurant not found.' } }, 404);
+    }
+    if (path.endsWith('/restaurants')) return adminResponse({ data: await listRestaurants(url) }, 200);
     const documentViewMatch = path.match(/\/kyc\/documents\/([^/]+)\/view$/);
     if (documentViewMatch) {
       const viewed = await viewKycDocument(documentViewMatch[1], auth.clerkUserId, requestId);
@@ -469,7 +734,7 @@ Deno.serve(async (request: Request): Promise<Response> => {
       if (subresource === 'payouts') return adminResponse({ data: await listPayouts(partnerMatch[1], url) }, 200);
     }
   } catch (error) {
-    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.'].includes(error.message)) {
+    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.'].includes(error.message)) {
       return adminResponse({ error: { message: error.message } }, 400);
     }
     console.error('admin-api delivery partner read failed', error instanceof Error ? error.message : 'unknown error');

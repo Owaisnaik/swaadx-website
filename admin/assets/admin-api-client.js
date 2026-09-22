@@ -70,6 +70,24 @@
       });
     },
     viewKycDocument: function (id) { return request('/kyc/documents/' + encodeURIComponent(id) + '/view'); },
+    getRestaurants: function (query) { return request('/restaurants' + (query ? '?' + query : '')); },
+    getRestaurant: function (id, query) { return request('/restaurants/' + encodeURIComponent(id) + (query ? '?' + query : '')); },
+    getRestaurantMenus: function (query) { return request('/restaurants/menus' + (query ? '?' + query : '')); },
+    getRestaurantModeration: function (query) { return request('/restaurants/moderation' + (query ? '?' + query : '')); },
+    getRestaurantApplications: function () { return request('/restaurants/applications'); },
+    getSuspendedRestaurants: function () { return request('/restaurants/suspended'); },
+    changeRestaurantLifecycle: function (id, action, reason) {
+      return request('/restaurants/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reason ? { reason: reason } : {})
+      });
+    },
+    changeMenuItemAvailability: function (restaurantId, menuItemId, action) {
+      return request('/restaurants/' + encodeURIComponent(restaurantId) + '/menu-items/' + encodeURIComponent(menuItemId) + '/' + encodeURIComponent(action), {
+        method: 'POST'
+      });
+    },
     getAuditLogs: function (query) { return request('/audit' + (query ? '?' + query : '')); },
     AdminApiError: AdminApiError
   };
