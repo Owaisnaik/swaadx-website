@@ -98,10 +98,90 @@ async function listPartners(url: URL) {
 }
 
 async function getPartner(id: string) {
-  const { data, error } = await supabaseAdmin.from('delivery_partners').select(partnerColumns).eq('id', parsePartnerId(id)).maybeSingle();
+  const partnerId = parsePartnerId(id);
+  const { data, error } = await supabaseAdmin.from('delivery_partners').select(partnerColumns).eq('id', partnerId).maybeSingle();
   if (error) throw error;
   if (!data) return null;
-  return safePartner(data);
+  const [{ data: kycProfile, error: kycError }, { data: activeDelivery, error: deliveryError }] = await Promise.all([
+    supabaseAdmin.from('delivery_partner_kyc_profiles')
+      .select('id,verification_status,legal_name,date_of_birth,pan_last4,submitted_at,verified_at,rejected_at,rejection_reason')
+      .eq('delivery_partner_id', partnerId).maybeSingle(),
+    supabaseAdmin.from('deliveries')
+      .select('id,order_id,status,assigned_at,picked_up_at,delivered_at,created_at,updated_at,orders(order_number)')
+      .eq('delivery_partner_id', partnerId)
+      .in('status', ['assigned', 'at_restaurant', 'picked_up', 'delivering'])
+      .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+  ]);
+  if (kycError) throw kycError;
+  if (deliveryError) throw deliveryError;
+  const partner = safePartner(data) as Record<string, unknown>;
+  partner.kyc = kycProfile ? {
+    id: kycProfile.id, verificationStatus: kycProfile.verification_status, legalName: kycProfile.legal_name,
+    dateOfBirth: kycProfile.date_of_birth, panLast4: kycProfile.pan_last4, submittedAt: kycProfile.submitted_at,
+    verifiedAt: kycProfile.verified_at, rejectedAt: kycProfile.rejected_at, rejectionReason: kycProfile.rejection_reason,
+  } : null;
+  partner.activeDelivery = activeDelivery ? {
+    id: activeDelivery.id, orderId: activeDelivery.order_id, orderNumber: activeDelivery.orders?.[0]?.order_number ?? null,
+    status: activeDelivery.status, assignedAt: activeDelivery.assigned_at, pickedUpAt: activeDelivery.picked_up_at,
+    deliveredAt: activeDelivery.delivered_at,
+  } : null;
+  return partner;
+}
+
+const statusTransitions: Record<string, { from: string[]; to: string }> = {
+  approve: { from: ['pending'], to: 'approved' },
+  reject: { from: ['pending'], to: 'rejected' },
+  suspend: { from: ['approved'], to: 'suspended' },
+  reactivate: { from: ['suspended'], to: 'approved' },
+};
+
+async function changePartnerStatus(id: string, action: string, adminClerkUserId: string, requestId: string, request: Request) {
+  const transition = statusTransitions[action];
+  if (!transition) throw new Error('Invalid delivery partner action.');
+  const partnerId = parsePartnerId(id);
+  let reason: string | null = null;
+  const contentType = request.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      throw new Error('Invalid action reason.');
+    }
+    if (body && typeof body === 'object' && 'reason' in body) {
+      if (typeof body.reason !== 'string' || body.reason.length > 500) throw new Error('Invalid action reason.');
+      reason = body.reason.trim() || null;
+    }
+  }
+  const { data: current, error: currentError } = await supabaseAdmin.from('delivery_partners')
+    .select('id,full_name,status').eq('id', partnerId).maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) return null;
+  if (!transition.from.includes(current.status)) {
+    return { conflict: true, current: { id: current.id, fullName: current.full_name, status: current.status } };
+  }
+  const { data: updated, error: updateError } = await supabaseAdmin.from('delivery_partners')
+    .update({ status: transition.to, updated_at: new Date().toISOString() })
+    .eq('id', partnerId).eq('status', current.status)
+    .select('id,full_name,status').maybeSingle();
+  if (updateError) throw updateError;
+  if (!updated) return { conflict: true, current: { id: current.id, fullName: current.full_name, status: current.status } };
+  try {
+    await recordAdminAuditEvent({
+      adminClerkUserId, action: `delivery_partner_${action}`, resourceType: 'delivery_partner', resourceId: partnerId,
+      previousState: { status: current.status }, newState: { status: updated.status }, reason, requestId,
+    });
+  } catch (auditError) {
+    const { error: rollbackError } = await supabaseAdmin.from('delivery_partners')
+      .update({ status: current.status, updated_at: new Date().toISOString() })
+      .eq('id', partnerId).eq('status', updated.status);
+    if (rollbackError) {
+      console.error('admin-api partner status rollback failed after audit failure', rollbackError.message);
+    }
+    console.error('admin-api partner status audit failed', auditError instanceof Error ? auditError.message : 'unknown error');
+    throw new Error('Delivery partner status change could not be completed.');
+  }
+  return { id: updated.id, fullName: updated.full_name, previousStatus: current.status, status: updated.status };
 }
 
 async function listPartnerDeliveries(id: string, url: URL) {
@@ -251,14 +331,14 @@ async function listAuditLogs(url: URL) {
   })), count, pagination.page, pagination.pageSize);
 }
 
-Deno.serve(async (request: Request) => {
+Deno.serve(async (request: Request): Promise<Response> => {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: ADMIN_CORS_HEADERS });
-  if (request.method !== 'GET') {
+  if (request.method !== 'GET' && request.method !== 'POST') {
     return adminResponse({ error: { message: 'Method not allowed.' } }, 405);
   }
 
   const auth = await authenticateAdmin(request);
-  if ('error' in auth) return auth.error;
+  if ('error' in auth && auth.error) return auth.error;
 
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '');
@@ -266,6 +346,17 @@ Deno.serve(async (request: Request) => {
   if (path.endsWith('/me')) return adminResponse({ data: { clerkUserId: auth.clerkUserId } }, 200);
   if (path.endsWith('/navigation')) return adminResponse({ data: { navigation } }, 200);
   try {
+    const partnerActionMatch = path.match(/\/delivery-partners\/([^/]+)\/(approve|reject|suspend|reactivate)$/);
+    if (request.method === 'POST' && partnerActionMatch) {
+      const changed = await changePartnerStatus(partnerActionMatch[1], partnerActionMatch[2], auth.clerkUserId, requestId, request);
+      if (!changed) return adminResponse({ error: { message: 'Delivery partner not found.' } }, 404);
+      if ('conflict' in changed) {
+        if (!changed.current) return adminResponse({ error: { message: 'Partner status changed. Refresh before trying again.' } }, 409);
+        return adminResponse({ error: { message: `Partner is currently ${changed.current.status}. Refresh before trying again.` } }, 409);
+      }
+      return adminResponse({ data: changed }, 200);
+    }
+    if (request.method !== 'GET') return adminResponse({ error: { message: 'Method not allowed.' } }, 405);
     if (path.endsWith('/audit')) return adminResponse({ data: await listAuditLogs(url) }, 200);
     const documentViewMatch = path.match(/\/kyc\/documents\/([^/]+)\/view$/);
     if (documentViewMatch) {
@@ -293,7 +384,7 @@ Deno.serve(async (request: Request) => {
       if (subresource === 'payouts') return adminResponse({ data: await listPayouts(partnerMatch[1], url) }, 200);
     }
   } catch (error) {
-    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.'].includes(error.message)) {
+    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.'].includes(error.message)) {
       return adminResponse({ error: { message: error.message } }, 400);
     }
     console.error('admin-api delivery partner read failed', error instanceof Error ? error.message : 'unknown error');

@@ -4,7 +4,7 @@ export const ADMIN_CORS_HEADERS = {
   'Content-Type': 'application/json',
   'Access-Control-Allow-Origin': 'https://swaadx.in',
   'Access-Control-Allow-Headers': 'authorization, content-type, x-client-correlation-id',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
 export function adminResponse(body: unknown, status: number) {

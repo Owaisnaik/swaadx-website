@@ -26,13 +26,50 @@
   }
   function error(message) {
     var node = document.getElementById('page-error');
-    if (node) node.textContent = message;
+    if (node) node.textContent = message || '';
+  }
+  function setBusy(button, busy) {
+    if (!button) return;
+    button.disabled = busy;
+    button.setAttribute('aria-busy', busy ? 'true' : 'false');
+  }
+  function getListOptions(options) {
+    var search = document.getElementById('partner-search');
+    var status = document.getElementById('partner-status');
+    return {
+      search: search ? search.value.trim() : '',
+      status: options.fixedStatus || (status ? status.value : ''),
+      page: options.page || 1,
+      pageSize: 20
+    };
+  }
+  function renderPagination(data, load) {
+    var node = document.getElementById('partner-pagination');
+    if (!node) return;
+    node.textContent = '';
+    var label = document.createElement('span');
+    label.className = 'muted';
+    label.textContent = data.total ? 'Page ' + data.page + ' of ' + data.totalPages : 'No results';
+    node.appendChild(label);
+    if (data.page > 1) {
+      var previous = document.createElement('button');
+      previous.className = 'button button--quiet';
+      previous.textContent = 'Previous';
+      previous.addEventListener('click', function () { load(data.page - 1); });
+      node.appendChild(previous);
+    }
+    if (data.page < data.totalPages) {
+      var next = document.createElement('button');
+      next.className = 'button button--quiet';
+      next.textContent = 'Next';
+      next.addEventListener('click', function () { load(data.page + 1); });
+      node.appendChild(next);
+    }
   }
   function buildRow(partner, columns) {
     var row = document.createElement('tr');
     columns.forEach(function (column) {
-      var value = column.render ? column.render(partner) : partner[column.key];
-      row.appendChild(cell(value));
+      row.appendChild(cell(column.render ? column.render(partner) : partner[column.key]));
     });
     var action = document.createElement('td');
     var view = document.createElement('a');
@@ -43,44 +80,95 @@
     row.appendChild(action);
     return row;
   }
-  function renderList(data, columns) {
+  function renderList(data, columns, load) {
     var body = document.getElementById('partner-table-body');
     if (!body) return;
     body.setAttribute('data-columns', String(columns.length + 1));
-    if (!data.items || !data.items.length) { empty(body, 'No delivery partners found.'); return; }
-    body.textContent = '';
-    data.items.forEach(function (partner) { body.appendChild(buildRow(partner, columns)); });
+    if (!data.items || !data.items.length) empty(body, 'No delivery partners found.');
+    else {
+      body.textContent = '';
+      data.items.forEach(function (partner) { body.appendChild(buildRow(partner, columns)); });
+    }
     var total = document.getElementById('partner-total');
     if (total) total.textContent = data.total.toLocaleString() + ' partner' + (data.total === 1 ? '' : 's');
+    renderPagination(data, load);
   }
   async function startList(options) {
-    try {
-      var query = new URLSearchParams({ page: '1', pageSize: '50' });
-      if (options.status) query.set('status', options.status);
-      var data = await window.SwaadxAdminApi.getDeliveryPartners(query.toString());
-      renderList(data, options.columns);
-    } catch (caught) {
-      error(caught.message || 'Unable to load delivery partners.');
+    options = options || {};
+    var page = 1;
+    var searchButton = document.getElementById('partner-search-button');
+    var refreshButton = document.getElementById('partner-refresh');
+    var load = async function (requestedPage) {
+      page = requestedPage || 1;
+      error('');
+      setBusy(refreshButton, true);
       var body = document.getElementById('partner-table-body');
-      if (body) empty(body, 'Unable to load delivery partners.');
-    }
+      if (body) body.innerHTML = '<tr><td colspan="' + (options.columns.length + 1) + '">Loading partners…</td></tr>';
+      try {
+        var filters = getListOptions({ fixedStatus: options.status, page: page });
+        var query = new URLSearchParams({ page: String(filters.page), pageSize: String(filters.pageSize) });
+        if (filters.status) query.set('status', filters.status);
+        if (filters.search) query.set('search', filters.search);
+        var data = await window.SwaadxAdminApi.getDeliveryPartners(query.toString());
+        renderList(data, options.columns, load);
+      } catch (caught) {
+        error(caught.message || 'Unable to load delivery partners.');
+        if (body) empty(body, 'Unable to load delivery partners.');
+      } finally { setBusy(refreshButton, false); }
+    };
+    if (searchButton) searchButton.addEventListener('click', function () { load(1); });
+    if (refreshButton) refreshButton.addEventListener('click', function () { load(page); });
+    var search = document.getElementById('partner-search');
+    if (search) search.addEventListener('keydown', function (event) { if (event.key === 'Enter') load(1); });
+    await load(1);
   }
   function standardColumns(includeApplication) {
     var columns = [
       { key: 'fullName', render: function (p) { return text(p.fullName) + ' (' + text(p.id).slice(0, 8) + ')'; } },
       { key: 'phone' },
-      { key: 'vehicleType', render: function (p) { return text(p.vehicleType) + (p.vehicleRegistrationNumber ? ' · ' + p.vehicleRegistrationNumber : ''); } },
+      { key: 'email' },
       { key: 'status', render: function (p) { return badge(p.status); } },
-      { key: 'isOnline', render: function (p) { return badge(p.isOnline ? 'Online' : 'Offline'); } }
+      { key: 'isOnline', render: function (p) { return badge(p.isOnline ? 'Online' : 'Offline'); } },
+      { key: 'createdAt', render: function (p) { return date(p.createdAt); } },
+      { key: 'applicationSubmittedAt', render: function (p) { return date(p.applicationSubmittedAt); } }
     ];
-    if (includeApplication) {
-      columns.push({ key: 'applicationSubmittedAt', render: function (p) { return date(p.applicationSubmittedAt); } });
-      columns.push({ key: 'onboardingCompletedAt', render: function (p) { return p.onboardingCompletedAt ? date(p.onboardingCompletedAt) : 'Not completed'; } });
-    } else {
-      columns.push({ key: 'applicationSubmittedAt', render: function (p) { return date(p.applicationSubmittedAt); } });
-      columns.push({ key: 'onboardingCompletedAt', render: function (p) { return p.onboardingCompletedAt ? 'Complete' : 'Pending'; } });
-    }
+    if (includeApplication) columns.push({ key: 'onboardingCompletedAt', render: function (p) { return p.onboardingCompletedAt ? date(p.onboardingCompletedAt) : 'Not completed'; } });
     return columns;
+  }
+  function renderActions(partner) {
+    var container = document.getElementById('partner-actions');
+    if (!container) return;
+    container.textContent = '';
+    var actions = {
+      pending: [{ label: 'Approve', action: 'approve' }, { label: 'Reject', action: 'reject' }],
+      approved: [{ label: 'Suspend', action: 'suspend' }],
+      suspended: [{ label: 'Reactivate', action: 'reactivate' }]
+    }[partner.status] || [];
+    actions.forEach(function (item) {
+      var button = document.createElement('button');
+      button.className = 'button button--quiet';
+      button.textContent = item.label;
+      button.addEventListener('click', function () { changeStatus(partner, item.action, button); });
+      container.appendChild(button);
+    });
+    if (!actions.length) container.textContent = 'No status actions are available for this partner.';
+  }
+  async function changeStatus(partner, action, button) {
+    var label = action.charAt(0).toUpperCase() + action.slice(1);
+    var reason = window.prompt('Optional reason for ' + label.toLowerCase() + ' ' + text(partner.fullName) + ':', '');
+    if (reason === null) return;
+    if (!window.confirm(label + ' delivery partner ' + text(partner.fullName) + '?')) return;
+    setBusy(button, true);
+    error('');
+    try {
+      var result = await window.SwaadxAdminApi.changeDeliveryPartnerStatus(partner.id, action, reason.trim());
+      partner.status = result.status;
+      var statusNode = document.querySelector('[data-field="Status"]');
+      if (statusNode) statusNode.textContent = result.status;
+      renderActions(partner);
+      var notice = document.getElementById('action-success');
+      if (notice) notice.textContent = 'Partner status updated to ' + result.status + '.';
+    } catch (caught) { error(caught.message || 'Unable to update partner status.'); setBusy(button, false); }
   }
   async function startPartnerDetail() {
     var id = new URLSearchParams(window.location.search).get('id');
@@ -92,17 +180,38 @@
         'Phone': partner.phone, 'Email': partner.email, 'Status': partner.status,
         'Online': partner.isOnline ? 'Online' : 'Offline', 'Created': date(partner.createdAt),
         'Application submitted': date(partner.applicationSubmittedAt), 'Onboarding completed': date(partner.onboardingCompletedAt),
-        'Address': partner.address, 'Date of birth': partner.dateOfBirth,
-        'Vehicle type': partner.vehicleType, 'Registration': partner.vehicleRegistrationNumber,
-        'Driving licence': partner.drivingLicenseNumber, 'Licence expiry': partner.drivingLicenseExpiry,
-        'RC number': partner.rcNumber
+        'Address': partner.address, 'Date of birth': partner.dateOfBirth, 'Vehicle type': partner.vehicleType,
+        'Registration': partner.vehicleRegistrationNumber, 'Driving licence': partner.drivingLicenseNumber,
+        'Licence expiry': partner.drivingLicenseExpiry, 'RC number': partner.rcNumber,
+        'KYC status': partner.kyc && partner.kyc.verificationStatus,
+        'Legal name': partner.kyc && partner.kyc.legalName, 'PAN last4': partner.kyc && partner.kyc.panLast4
       };
       Object.keys(fields).forEach(function (key) {
         var node = document.querySelector('[data-field="' + key + '"]');
         if (node) node.textContent = text(fields[key]);
       });
-      await Promise.all([loadDeliveries(id), loadEarnings(id), loadPayoutMethods(id), loadPayouts(id)]);
+      var active = document.getElementById('active-delivery');
+      if (active) active.textContent = partner.activeDelivery ? text(partner.activeDelivery.orderNumber || partner.activeDelivery.orderId) + ' · ' + text(partner.activeDelivery.status) : 'No active delivery';
+      var kycLink = document.getElementById('kyc-link');
+      if (kycLink && partner.kyc && partner.kyc.id) kycLink.href = '../kyc/review.html?id=' + encodeURIComponent(partner.kyc.id);
+      renderActions(partner);
+      await Promise.all([loadDeliveries(id), loadEarnings(id), loadPayoutMethods(id), loadPayouts(id), loadKycDocuments(partner.kyc && partner.kyc.id)]);
     } catch (caught) { error(caught.message || 'Unable to load the delivery partner.'); }
+  }
+  async function loadKycDocuments(profileId) {
+    var body = document.getElementById('kyc-documents-body');
+    if (!body) return;
+    if (!profileId) { empty(body, 'No KYC profile found.'); return; }
+    try {
+      var documents = await window.SwaadxAdminApi.getKycDocuments(profileId);
+      if (!documents.length) { empty(body, 'No KYC documents found.'); return; }
+      body.textContent = '';
+      documents.forEach(function (documentItem) {
+        var row = document.createElement('tr');
+        [documentItem.documentType, badge(documentItem.verificationStatus), date(documentItem.expiryDate)].forEach(function (value) { row.appendChild(cell(value)); });
+        body.appendChild(row);
+      });
+    } catch (caught) { empty(body, 'Unable to load KYC document statuses.'); }
   }
   async function loadDeliveries(id) {
     var body = document.getElementById('deliveries-body');

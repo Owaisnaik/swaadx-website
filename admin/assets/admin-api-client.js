@@ -52,6 +52,13 @@
     getPartnerEarnings: function (id, query) { return request('/delivery-partners/' + encodeURIComponent(id) + '/earnings' + (query ? '?' + query : '')); },
     getPayoutMethods: function (id) { return request('/delivery-partners/' + encodeURIComponent(id) + '/payout-methods'); },
     getPartnerPayouts: function (id, query) { return request('/delivery-partners/' + encodeURIComponent(id) + '/payouts' + (query ? '?' + query : '')); },
+    changeDeliveryPartnerStatus: function (id, action, reason) {
+      return request('/delivery-partners/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reason ? { reason: reason } : {})
+      });
+    },
     getKycProfiles: function (query) { return request('/kyc' + (query ? '?' + query : '')); },
     getKycProfile: function (id) { return request('/kyc/' + encodeURIComponent(id)); },
     getKycDocuments: function (id) { return request('/kyc/' + encodeURIComponent(id) + '/documents'); },
