@@ -82,6 +82,8 @@
     getPayment: function (id) { return request('/payments/' + encodeURIComponent(id)); },
     getEarnings: function (query) { return request('/earnings' + (query ? '?' + query : '')); },
     getEarning: function (id) { return request('/earnings/' + encodeURIComponent(id)); },
+    getPayouts: function (query) { return request('/payouts' + (query ? '?' + query : '')); },
+    getPayout: function (id) { return request('/payouts/' + encodeURIComponent(id)); },
     changeRestaurantLifecycle: function (id, action, reason) {
       return request('/restaurants/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
         method: 'POST',
