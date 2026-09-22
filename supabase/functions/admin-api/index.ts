@@ -235,11 +235,20 @@ function parseUuid(value: string, message: string) {
 
 function safeKycProfile(row: Record<string, any>) {
   const partner = row.delivery_partners;
+  const documents = Array.isArray(row.delivery_partner_kyc_documents) ? row.delivery_partner_kyc_documents : [];
   return {
     id: row.id, deliveryPartnerId: row.delivery_partner_id, verificationStatus: row.verification_status,
     legalName: row.legal_name, dateOfBirth: row.date_of_birth, panLast4: row.pan_last4,
     submittedAt: row.submitted_at, verifiedAt: row.verified_at, rejectedAt: row.rejected_at,
     rejectionReason: row.rejection_reason,
+    documentSummary: {
+      total: documents.length,
+      byStatus: documents.reduce((summary: Record<string, number>, document: Record<string, unknown>) => {
+        const status = typeof document.verification_status === 'string' ? document.verification_status : 'unknown';
+        summary[status] = (summary[status] ?? 0) + 1;
+        return summary;
+      }, {}),
+    },
     partner: partner ? { id: partner.id, fullName: partner.full_name, phone: partner.phone, email: partner.email, status: partner.status } : null,
   };
 }
@@ -250,7 +259,7 @@ async function listKyc(url: URL) {
   const search = url.searchParams.get('search')?.trim().replace(/[%(),]/g, '');
   if (status && !kycStatuses.includes(status)) throw new Error('Invalid KYC status.');
   let query = supabaseAdmin.from('delivery_partner_kyc_profiles')
-    .select('id,delivery_partner_id,verification_status,legal_name,date_of_birth,pan_last4,submitted_at,verified_at,rejected_at,rejection_reason,delivery_partners(id,full_name,phone,email,status)', { count: 'exact' })
+    .select('id,delivery_partner_id,verification_status,legal_name,date_of_birth,pan_last4,submitted_at,verified_at,rejected_at,rejection_reason,delivery_partners(id,full_name,phone,email,status),delivery_partner_kyc_documents(id,verification_status)', { count: 'exact' })
     .order('created_at', { ascending: false }).order('id', { ascending: false }).range(pagination.from, pagination.to);
   if (status) query = query.eq('verification_status', status);
   if (search) query = query.or(`legal_name.ilike.%${search}%,delivery_partners.full_name.ilike.%${search}%`);
@@ -261,10 +270,74 @@ async function listKyc(url: URL) {
 
 async function getKycProfile(id: string) {
   const { data, error } = await supabaseAdmin.from('delivery_partner_kyc_profiles')
-    .select('id,delivery_partner_id,verification_status,legal_name,date_of_birth,pan_last4,submitted_at,verified_at,rejected_at,rejection_reason,delivery_partners(id,full_name,phone,email,status)')
+    .select('id,delivery_partner_id,verification_status,legal_name,date_of_birth,pan_last4,submitted_at,verified_at,rejected_at,rejection_reason,delivery_partners(id,full_name,phone,email,status),delivery_partner_kyc_documents(id,verification_status)')
     .eq('id', parseUuid(id, 'Invalid KYC profile ID.')).maybeSingle();
   if (error) throw error;
   return data ? safeKycProfile(data) : null;
+}
+
+const kycTransitions: Record<string, { from: string[]; to: string }> = {
+  start_review: { from: ['submitted', 'rejected'], to: 'under_review' },
+  approve: { from: ['under_review'], to: 'verified' },
+  reject: { from: ['under_review'], to: 'rejected' },
+};
+
+async function changeKycStatus(id: string, action: string, adminClerkUserId: string, requestId: string, request: Request) {
+  const transition = kycTransitions[action];
+  if (!transition) throw new Error('Invalid KYC action.');
+  const profileId = parseUuid(id, 'Invalid KYC profile ID.');
+  let reason: string | null = null;
+  if (request.headers.get('content-type')?.includes('application/json')) {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      throw new Error('Invalid KYC decision reason.');
+    }
+    if (body && typeof body === 'object' && 'reason' in body) {
+      if (typeof body.reason !== 'string' || body.reason.length > 500) throw new Error('Invalid KYC decision reason.');
+      reason = body.reason.trim() || null;
+    }
+  }
+  if (action === 'reject' && !reason) throw new Error('A rejection reason is required.');
+  const { data: current, error: currentError } = await supabaseAdmin.from('delivery_partner_kyc_profiles')
+    .select('id,delivery_partner_id,verification_status,legal_name,verified_at,rejected_at,rejection_reason').eq('id', profileId).maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) return null;
+  if (!transition.from.includes(current.verification_status)) {
+    return { conflict: true, current: { id: current.id, status: current.verification_status } };
+  }
+  const now = new Date().toISOString();
+  const update = action === 'approve'
+    ? { verification_status: transition.to, verified_at: now, rejected_at: null, rejection_reason: null, updated_at: now }
+    : action === 'reject'
+      ? { verification_status: transition.to, verified_at: null, rejected_at: now, rejection_reason: reason, updated_at: now }
+      : { verification_status: transition.to, verified_at: null, rejected_at: null, rejection_reason: null, updated_at: now };
+  const { data: updated, error: updateError } = await supabaseAdmin.from('delivery_partner_kyc_profiles')
+    .update(update).eq('id', profileId).eq('verification_status', current.verification_status)
+    .select('id,delivery_partner_id,verification_status,legal_name').maybeSingle();
+  if (updateError) throw updateError;
+  if (!updated) return { conflict: true, current: { id: current.id, status: current.verification_status } };
+  try {
+    await recordAdminAuditEvent({
+      adminClerkUserId, action: `kyc_${action}`, resourceType: 'kyc_profile', resourceId: profileId,
+      previousState: { status: current.verification_status }, newState: { status: updated.verification_status },
+      reason, requestId,
+    });
+  } catch (auditError) {
+    const { error: rollbackError } = await supabaseAdmin.from('delivery_partner_kyc_profiles')
+      .update({
+        verification_status: current.verification_status,
+        verified_at: current.verified_at,
+        rejected_at: current.rejected_at,
+        rejection_reason: current.rejection_reason,
+        updated_at: new Date().toISOString(),
+      }).eq('id', profileId).eq('verification_status', updated.verification_status);
+    if (rollbackError) console.error('admin-api KYC status rollback failed after audit failure', rollbackError.message);
+    console.error('admin-api KYC status audit failed', auditError instanceof Error ? auditError.message : 'unknown error');
+    throw new Error('KYC decision could not be completed.');
+  }
+  return { id: updated.id, deliveryPartnerId: updated.delivery_partner_id, legalName: updated.legal_name, previousStatus: current.verification_status, status: updated.verification_status };
 }
 
 async function listKycDocuments(profileId: string) {
@@ -347,16 +420,28 @@ Deno.serve(async (request: Request): Promise<Response> => {
   if (path.endsWith('/navigation')) return adminResponse({ data: { navigation } }, 200);
   try {
     const partnerActionMatch = path.match(/\/delivery-partners\/([^/]+)\/(approve|reject|suspend|reactivate)$/);
-    if (request.method === 'POST' && partnerActionMatch) {
-      const changed = await changePartnerStatus(partnerActionMatch[1], partnerActionMatch[2], auth.clerkUserId, requestId, request);
-      if (!changed) return adminResponse({ error: { message: 'Delivery partner not found.' } }, 404);
-      if ('conflict' in changed) {
-        if (!changed.current) return adminResponse({ error: { message: 'Partner status changed. Refresh before trying again.' } }, 409);
-        return adminResponse({ error: { message: `Partner is currently ${changed.current.status}. Refresh before trying again.` } }, 409);
+    if (request.method === 'POST') {
+      if (partnerActionMatch) {
+        const changed = await changePartnerStatus(partnerActionMatch[1], partnerActionMatch[2], auth.clerkUserId, requestId, request);
+        if (!changed) return adminResponse({ error: { message: 'Delivery partner not found.' } }, 404);
+        if ('conflict' in changed) {
+          if (!changed.current) return adminResponse({ error: { message: 'Partner status changed. Refresh before trying again.' } }, 409);
+          return adminResponse({ error: { message: `Partner is currently ${changed.current.status}. Refresh before trying again.` } }, 409);
+        }
+        return adminResponse({ data: changed }, 200);
       }
-      return adminResponse({ data: changed }, 200);
+      const kycActionMatch = path.match(/\/kyc\/([^/]+)\/(start-review|approve|reject)$/);
+      if (kycActionMatch) {
+        const changed = await changeKycStatus(kycActionMatch[1], kycActionMatch[2], auth.clerkUserId, requestId, request);
+        if (!changed) return adminResponse({ error: { message: 'KYC profile not found.' } }, 404);
+        if ('conflict' in changed) {
+          if (!changed.current) return adminResponse({ error: { message: 'KYC profile status changed. Refresh before trying again.' } }, 409);
+          return adminResponse({ error: { message: `KYC profile is currently ${changed.current.status}. Refresh before trying again.` } }, 409);
+        }
+        return adminResponse({ data: changed }, 200);
+      }
+      return adminResponse({ error: { message: 'Method not allowed.' } }, 405);
     }
-    if (request.method !== 'GET') return adminResponse({ error: { message: 'Method not allowed.' } }, 405);
     if (path.endsWith('/audit')) return adminResponse({ data: await listAuditLogs(url) }, 200);
     const documentViewMatch = path.match(/\/kyc\/documents\/([^/]+)\/view$/);
     if (documentViewMatch) {
@@ -384,7 +469,7 @@ Deno.serve(async (request: Request): Promise<Response> => {
       if (subresource === 'payouts') return adminResponse({ data: await listPayouts(partnerMatch[1], url) }, 200);
     }
   } catch (error) {
-    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.'].includes(error.message)) {
+    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.'].includes(error.message)) {
       return adminResponse({ error: { message: error.message } }, 400);
     }
     console.error('admin-api delivery partner read failed', error instanceof Error ? error.message : 'unknown error');

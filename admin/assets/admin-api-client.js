@@ -62,6 +62,13 @@
     getKycProfiles: function (query) { return request('/kyc' + (query ? '?' + query : '')); },
     getKycProfile: function (id) { return request('/kyc/' + encodeURIComponent(id)); },
     getKycDocuments: function (id) { return request('/kyc/' + encodeURIComponent(id) + '/documents'); },
+    changeKycStatus: function (id, action, reason) {
+      return request('/kyc/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reason ? { reason: reason } : {})
+      });
+    },
     viewKycDocument: function (id) { return request('/kyc/documents/' + encodeURIComponent(id) + '/view'); },
     getAuditLogs: function (query) { return request('/audit' + (query ? '?' + query : '')); },
     AdminApiError: AdminApiError
