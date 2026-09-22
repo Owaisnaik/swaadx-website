@@ -78,6 +78,8 @@
     getSuspendedRestaurants: function () { return request('/restaurants/suspended'); },
     getOrders: function (query) { return request('/orders' + (query ? '?' + query : '')); },
     getOrder: function (id) { return request('/orders/' + encodeURIComponent(id)); },
+    getPayments: function (query) { return request('/payments' + (query ? '?' + query : '')); },
+    getPayment: function (id) { return request('/payments/' + encodeURIComponent(id)); },
     changeRestaurantLifecycle: function (id, action, reason) {
       return request('/restaurants/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
         method: 'POST',
