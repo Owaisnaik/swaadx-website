@@ -9,6 +9,42 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 const clerkClient = createClerkClient({ secretKey: Deno.env.get('CLERK_SECRET_KEY') ?? '' });
+if (!Deno.env.get('PAYOUT_METHOD_ENCRYPTION_KEY')) {
+  console.error('admin-api: missing required environment variable PAYOUT_METHOD_ENCRYPTION_KEY');
+}
+
+const payoutCryptoEncoder = new TextEncoder();
+function payoutBase64Decode(value: string) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function payoutEncryptionKeyBytes() {
+  const encoded = Deno.env.get('PAYOUT_METHOD_ENCRYPTION_KEY') ?? '';
+  let decoded: Uint8Array;
+  try {
+    decoded = payoutBase64Decode(encoded);
+  } catch {
+    throw new Error('PAYOUT_METHOD_ENCRYPTION_KEY must be valid base64.');
+  }
+  if (decoded.length !== 32) throw new Error('PAYOUT_METHOD_ENCRYPTION_KEY must decode to 32 bytes.');
+  const raw = new ArrayBuffer(decoded.byteLength);
+  new Uint8Array(raw).set(decoded);
+  return raw;
+}
+
+async function decryptPayoutCredential(value: string | null | undefined) {
+  if (!value) return null;
+  const parts = value.split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1') throw new Error('Unsupported payout credential format.');
+  const key = await crypto.subtle.importKey('raw', payoutEncryptionKeyBytes(), { name: 'AES-GCM' }, false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: payoutBase64Decode(parts[1]) },
+    key,
+    payoutBase64Decode(parts[2]),
+  );
+  return new TextDecoder().decode(plaintext);
+}
 
 const navigation = [
   { label: 'Dashboard', href: 'dashboard.html', key: 'dashboard' },
@@ -55,6 +91,18 @@ function parsePage(url: URL) {
     throw new Error('Invalid pagination.');
   }
   return { page, pageSize, from: (page - 1) * pageSize, to: page * pageSize - 1 };
+}
+
+async function parseBodySafe(request: Request): Promise<Record<string, unknown>> {
+  if (!request.body) return {};
+  try {
+    const body: unknown = await request.json();
+    return body && typeof body === 'object' && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function parsePartnerId(value: string) {
@@ -859,14 +907,53 @@ async function listPartnerEarnings(id: string, url: URL) {
   return { ...safePage(rows.map((row) => ({ id: row.id, deliveryId: row.delivery_id, amount: row.amount, status: row.status, createdAt: row.created_at })), count, pagination.page, pagination.pageSize), pageTotalAmount: total };
 }
 
-async function listPayoutMethods(id: string) {
-  const { data, error } = await supabaseAdmin.from('delivery_partner_payout_methods').select('id,method_type,status,account_holder_name,bank_name,ifsc,account_last4,masked_upi,is_default,verified_at,created_at,updated_at').eq('delivery_partner_id', parsePartnerId(id)).order('created_at', { ascending: false });
+async function listPayoutMethods(id: string, includeSensitive: boolean) {
+  const columns = includeSensitive
+    ? 'id,method_type,status,account_holder_name,bank_name,ifsc,account_last4,masked_upi,account_number_encrypted,upi_id_encrypted,provider_beneficiary_reference,is_default,verified_at,created_at,updated_at'
+    : 'id,method_type,status,account_holder_name,bank_name,ifsc,account_last4,masked_upi,provider_beneficiary_reference,is_default,verified_at,created_at,updated_at';
+  const { data, error }: { data: Record<string, any>[] | null; error: any } = await supabaseAdmin
+    .from('delivery_partner_payout_methods')
+    .select(columns)
+    .eq('delivery_partner_id', parsePartnerId(id))
+    .neq('status', 'disabled')
+    .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((row) => ({
+  return Promise.all((data ?? []).map(async (row) => ({
     id: row.id, methodType: row.method_type, status: row.status, accountHolderName: row.account_holder_name,
     bankName: row.bank_name, ifsc: row.ifsc, accountLast4: row.account_last4, maskedUpi: row.masked_upi,
+    ...(includeSensitive ? {
+      accountNumber: await decryptPayoutCredential(row.account_number_encrypted),
+      upiId: await decryptPayoutCredential(row.upi_id_encrypted),
+    } : {}),
+    providerBeneficiaryReference: row.provider_beneficiary_reference,
     isDefault: row.is_default, verifiedAt: row.verified_at, createdAt: row.created_at, updatedAt: row.updated_at,
-  }));
+  })));
+}
+
+async function changePayoutMethodStatus(partnerId: string, methodId: string, action: string, reason: string | null, adminClerkUserId: string, requestId: string) {
+  const parsedPartnerId = parsePartnerId(partnerId);
+  const parsedMethodId = parseUuid(methodId, 'Invalid payout method ID.');
+  const transition = action === 'verify' ? 'verified' : action === 'reject' ? 'rejected' : null;
+  if (!transition) throw new Error('Invalid payout method action.');
+  if (transition === 'rejected' && !reason?.trim()) throw new Error('A payout method rejection reason is required.');
+  const { data: current, error: currentError } = await supabaseAdmin.from('delivery_partner_payout_methods')
+    .select('id,delivery_partner_id,status').eq('id', parsedMethodId).eq('delivery_partner_id', parsedPartnerId).maybeSingle();
+  if (currentError) throw currentError;
+  if (!current) return null;
+  if (current.status !== 'pending') throw new Error('Only pending payout methods can be reviewed.');
+  const now = new Date().toISOString();
+  const { data: updated, error: updateError } = await supabaseAdmin.from('delivery_partner_payout_methods')
+    .update({ status: transition, verified_at: transition === 'verified' ? now : null, updated_at: now })
+    .eq('id', parsedMethodId).eq('status', 'pending')
+    .select('id,method_type,status,account_holder_name,bank_name,ifsc,account_last4,masked_upi,is_default,verified_at,created_at,updated_at').maybeSingle();
+  if (updateError) throw updateError;
+  if (!updated) throw new Error('Payout method review conflict.');
+  await recordAdminAuditEvent({
+    adminClerkUserId, action: `payout_method_${action}`, resourceType: 'delivery_partner_payout_method',
+    resourceId: parsedMethodId, reason: reason?.trim() || null, requestId,
+    previousState: { status: current.status }, newState: { status: updated.status },
+  });
+  return updated;
 }
 
 async function listPayouts(id: string, url: URL) {
@@ -1098,6 +1185,15 @@ Deno.serve(async (request: Request): Promise<Response> => {
   if (path.endsWith('/me')) return adminResponse({ data: { clerkUserId: auth.clerkUserId } }, 200);
   if (path.endsWith('/navigation')) return adminResponse({ data: { navigation } }, 200);
   try {
+    const payoutMethodActionMatch = path.match(/\/delivery-partners\/([^/]+)\/payout-methods\/([^/]+)\/(verify|reject)$/);
+    if (request.method === 'POST' && payoutMethodActionMatch) {
+      const body = await parseBodySafe(request);
+      const updated = await changePayoutMethodStatus(
+        payoutMethodActionMatch[1], payoutMethodActionMatch[2], payoutMethodActionMatch[3],
+        body?.reason ? String(body.reason) : null, auth.clerkUserId, requestId,
+      );
+      return updated ? adminResponse({ data: updated }, 200) : adminResponse({ error: { message: 'Payout method not found.' } }, 404);
+    }
     const partnerActionMatch = path.match(/\/delivery-partners\/([^/]+)\/(approve|reject|suspend|reactivate)$/);
     if (request.method === 'POST') {
       const restaurantLifecycleMatch = path.match(/\/restaurants\/([^/]+)\/(archive|reactivate)$/);
@@ -1125,7 +1221,8 @@ Deno.serve(async (request: Request): Promise<Response> => {
       }
       const kycActionMatch = path.match(/\/kyc\/([^/]+)\/(start-review|approve|reject)$/);
       if (kycActionMatch) {
-        const changed = await changeKycStatus(kycActionMatch[1], kycActionMatch[2], auth.clerkUserId, requestId, request);
+        const action = kycActionMatch[2] === 'start-review' ? 'start_review' : kycActionMatch[2];
+        const changed = await changeKycStatus(kycActionMatch[1], action, auth.clerkUserId, requestId, request);
         if (!changed) return adminResponse({ error: { message: 'KYC profile not found.' } }, 404);
         if ('conflict' in changed) {
           if (!changed.current) return adminResponse({ error: { message: 'KYC profile status changed. Refresh before trying again.' } }, 409);
@@ -1196,11 +1293,15 @@ Deno.serve(async (request: Request): Promise<Response> => {
       if (!subresource) return adminResponse({ data: partner }, 200);
       if (subresource === 'deliveries') return adminResponse({ data: await listPartnerDeliveries(partnerMatch[1], url) }, 200);
       if (subresource === 'earnings') return adminResponse({ data: await listPartnerEarnings(partnerMatch[1], url) }, 200);
-      if (subresource === 'payout-methods') return adminResponse({ data: await listPayoutMethods(partnerMatch[1]) }, 200);
+      if (subresource === 'payout-methods') {
+        return adminResponse({
+          data: await listPayoutMethods(partnerMatch[1], url.searchParams.get('includeSensitive') === 'true'),
+        }, 200);
+      }
       if (subresource === 'payouts') return adminResponse({ data: await listPayouts(partnerMatch[1], url) }, 200);
     }
   } catch (error) {
-    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.', 'Invalid order status.', 'Invalid order payment status.', 'Invalid order restaurant ID.', 'Invalid order start date.', 'Invalid order end date.', 'Invalid order date range.', 'Invalid order ID.', 'Invalid payment status.', 'Invalid payment restaurant ID.', 'Invalid payment start date.', 'Invalid payment end date.', 'Invalid payment date range.', 'Invalid payment ID.', 'Invalid earning status.', 'Invalid earning delivery partner ID.', 'Invalid earning restaurant ID.', 'Invalid earning start date.', 'Invalid earning end date.', 'Invalid earning date range.', 'Invalid earning ID.', 'Invalid payout status.', 'Invalid payout delivery partner ID.', 'Invalid payout settlement ID.', 'Invalid payout start date.', 'Invalid payout end date.', 'Invalid payout date range.', 'Invalid payout ID.'].includes(error.message)) {
+    if (error instanceof Error && ['Invalid pagination.', 'Invalid partner status.', 'Invalid delivery partner ID.', 'Invalid KYC status.', 'Invalid KYC profile ID.', 'Invalid document ID.', 'Invalid delivery partner action.', 'Invalid action reason.', 'Invalid KYC action.', 'Invalid KYC decision reason.', 'A rejection reason is required.', 'Invalid payout method ID.', 'Invalid payout method action.', 'A payout method rejection reason is required.', 'Invalid restaurant availability.', 'Invalid restaurant lifecycle.', 'Invalid restaurant ID.', 'Invalid restaurant lifecycle action.', 'Invalid restaurant archive reason.', 'Invalid menu item ID.', 'Invalid menu item action.', 'Invalid restaurant menu pagination.', 'Invalid restaurant review pagination.', 'Invalid order status.', 'Invalid order payment status.', 'Invalid order restaurant ID.', 'Invalid order start date.', 'Invalid order end date.', 'Invalid order date range.', 'Invalid order ID.', 'Invalid payment status.', 'Invalid payment restaurant ID.', 'Invalid payment start date.', 'Invalid payment end date.', 'Invalid payment date range.', 'Invalid payment ID.', 'Invalid earning status.', 'Invalid earning delivery partner ID.', 'Invalid earning restaurant ID.', 'Invalid earning start date.', 'Invalid earning end date.', 'Invalid earning date range.', 'Invalid earning ID.', 'Invalid payout status.', 'Invalid payout delivery partner ID.', 'Invalid payout settlement ID.', 'Invalid payout start date.', 'Invalid payout end date.', 'Invalid payout date range.', 'Invalid payout ID.'].includes(error.message)) {
       return adminResponse({ error: { message: error.message } }, 400);
     }
     console.error('admin-api read failed', error instanceof Error ? error.message : 'unknown error');

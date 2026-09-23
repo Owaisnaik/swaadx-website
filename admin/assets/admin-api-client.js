@@ -50,7 +50,8 @@
     getDeliveryPartner: function (id) { return request('/delivery-partners/' + encodeURIComponent(id)); },
     getPartnerDeliveries: function (id, query) { return request('/delivery-partners/' + encodeURIComponent(id) + '/deliveries' + (query ? '?' + query : '')); },
     getPartnerEarnings: function (id, query) { return request('/delivery-partners/' + encodeURIComponent(id) + '/earnings' + (query ? '?' + query : '')); },
-    getPayoutMethods: function (id) { return request('/delivery-partners/' + encodeURIComponent(id) + '/payout-methods'); },
+    getPayoutMethods: function (id, includeSensitive) { return request('/delivery-partners/' + encodeURIComponent(id) + '/payout-methods' + (includeSensitive ? '?includeSensitive=true' : '')); },
+    changePayoutMethodStatus: function (partnerId, methodId, action, reason) { return request('/delivery-partners/' + encodeURIComponent(partnerId) + '/payout-methods/' + encodeURIComponent(methodId) + '/' + encodeURIComponent(action), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(reason ? { reason: reason } : {}) }); },
     getPartnerPayouts: function (id, query) { return request('/delivery-partners/' + encodeURIComponent(id) + '/payouts' + (query ? '?' + query : '')); },
     changeDeliveryPartnerStatus: function (id, action, reason) {
       return request('/delivery-partners/' + encodeURIComponent(id) + '/' + encodeURIComponent(action), {
