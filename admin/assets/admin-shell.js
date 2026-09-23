@@ -13,7 +13,6 @@
     { label: 'Restaurants', key: 'restaurants', children: [
       { label: 'Applications', href: 'restaurants/applications.html' },
       { label: 'All Restaurants', href: 'restaurants/index.html' },
-      { label: 'Menus', href: 'restaurants/menus.html' },
       { label: 'Content Moderation', href: 'restaurants/moderation.html' },
       { label: 'Suspended', href: 'restaurants/suspended.html' }
     ] },
