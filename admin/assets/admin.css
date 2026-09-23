@@ -56,6 +56,8 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
 .filter-bar label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .filter-bar input, .filter-bar select { min-height: 38px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
 .secure-preview { margin: 18px 0 0; padding: 12px; border-radius: 9px; background: #fff0e8; color: var(--orange-dark); }
+#document-viewer.secure-preview > .secure-preview__image { display: block !important; width: 100% !important; max-width: 550px !important; height: auto !important; margin-left: auto !important; margin-right: auto !important; object-fit: contain !important; }
+#document-viewer.secure-preview > .secure-preview__frame { display: block !important; width: 100% !important; max-width: 750px !important; height: 520px !important; margin-left: auto !important; margin-right: auto !important; border: 1px solid var(--line); background: #fff; }
 .admin-shell { background: #f8f9fa; }
 .admin-layout { min-height: 100vh; display: flex; }
 .admin-sidebar { width: 248px; flex: 0 0 248px; padding: 24px 14px; background: #211d1a; color: #fff; }

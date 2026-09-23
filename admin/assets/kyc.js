@@ -24,8 +24,17 @@
     if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
     return null;
   }
-  function appendOpenLink(viewer, signedUrl, label) {
-    var link = document.createElement('a'); link.href = signedUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = label || 'Open in new tab'; viewer.appendChild(link);
+  function appendOpenButton(viewer, signedUrl, label) {
+    var button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'button button--quiet table-action';
+    button.textContent = label || 'Open in new tab';
+    button.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.open(signedUrl, '_blank', 'noopener,noreferrer');
+    });
+    viewer.appendChild(button);
   }
   function renderPagination(data, load) {
     var node = document.getElementById('kyc-pagination'); if (!node) return;
@@ -103,7 +112,7 @@
         documents.forEach(function (documentRecord) {
           var row = document.createElement('tr');
           [documentRecord.documentType, badge(documentRecord.verificationStatus), date(documentRecord.expiryDate), date(documentRecord.submittedAt), date(documentRecord.verifiedAt)].forEach(function (value) { row.appendChild(cell(value)); });
-          var action = document.createElement('button'); action.type = 'button'; action.className = 'button button--quiet table-action'; action.textContent = 'View document'; action.onclick = function () { viewDocument(documentRecord.id, action); }; row.appendChild(cell(action)); body.appendChild(row);
+          var action = document.createElement('button'); action.type = 'button'; action.className = 'button button--quiet table-action'; action.textContent = 'View document'; action.addEventListener('click', function (event) { event.preventDefault(); event.stopPropagation(); viewDocument(documentRecord.id, action); }); row.appendChild(cell(action)); body.appendChild(row);
         });
       } catch (caught) { error(caught.message || 'Unable to load KYC review.'); }
     };
@@ -125,7 +134,7 @@
       if (!mimeType) {
         if (viewer) {
           viewer.textContent = 'Inline preview unavailable for this document type. ';
-          appendOpenLink(viewer, result.signedUrl);
+          appendOpenButton(viewer, result.signedUrl);
         }
       } else {
         var blob = new Blob([bytes], { type: mimeType });
@@ -140,7 +149,7 @@
           if (viewer) {
             revokePreviewUrl();
             viewer.textContent = 'Inline preview unavailable. ';
-            appendOpenLink(viewer, result.signedUrl);
+            appendOpenButton(viewer, result.signedUrl);
           }
         };
         if (viewer) {
@@ -154,7 +163,7 @@
     } catch (caught) {
       if (viewer) {
         viewer.textContent = 'Unable to load inline preview. ';
-        if (typeof result !== 'undefined' && result && result.signedUrl) appendOpenLink(viewer, result.signedUrl);
+        if (typeof result !== 'undefined' && result && result.signedUrl) appendOpenButton(viewer, result.signedUrl);
       }
       error(caught.message || 'Unable to open document preview.');
     }
