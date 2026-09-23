@@ -49,6 +49,9 @@ tbody tr:last-child td { border-bottom: 0; }
 dl { display: grid; grid-template-columns: minmax(130px, .8fr) 1.2fr; gap: 11px 16px; margin: 0; }
 dt { color: var(--muted); font-size: 12px; font-weight: 700; }
 dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
+.kyc-pan-value { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.kyc-pan-value > span { min-width: 0; overflow-wrap: anywhere; }
+.kyc-pan-value > .button { flex: 0 0 auto; white-space: nowrap; }
 .detail-item { padding: 14px 0; border-top: 1px solid var(--line); }
 .detail-item:first-child { padding-top: 0; border-top: 0; }
 .detail-item p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
@@ -120,4 +123,6 @@ dd { margin: 0; overflow-wrap: anywhere; font-size: 13px; }
   .summary-card strong { font-size: 28px; }
   .module-card { grid-template-columns: 38px 1fr; }
   .module-card .status-pill { grid-column: 2; justify-self: start; }
+  .kyc-pan-value { align-items: flex-start; flex-wrap: wrap; }
+  .kyc-pan-value > .button { margin-left: auto; }
 }
