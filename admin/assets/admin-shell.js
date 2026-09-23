@@ -7,6 +7,7 @@
       { label: 'Applications', href: 'delivery-partners/applications.html' },
       { label: 'All Partners', href: 'delivery-partners/index.html' },
       { label: 'KYC Reviews', href: 'kyc/index.html' },
+      { label: 'Payment Details', href: 'payment-details/index.html' },
       { label: 'Suspended', href: 'delivery-partners/suspended.html' }
     ] },
     { label: 'Restaurants', key: 'restaurants', children: [
