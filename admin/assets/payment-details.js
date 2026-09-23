@@ -26,6 +26,27 @@
     if (method.methodType === 'upi') return text(method.maskedUpi);
     return method.accountLast4 ? '•••• ' + method.accountLast4 : '—';
   }
+  function renderRows(rows, statusFilter, body) {
+    var visibleRows = rows.filter(function (entry) {
+      var isVerified = eligible(entry.partner, entry.method);
+      return statusFilter === 'all' || (statusFilter === 'verified' ? isVerified : !isVerified);
+    });
+    body.textContent = '';
+    if (!visibleRows.length) {
+      var empty = document.createElement('tr');
+      empty.appendChild(cell('No delivery partners found.'));
+      empty.firstChild.colSpan = 9;
+      body.appendChild(empty);
+      return;
+    }
+    visibleRows.forEach(function (entry) {
+      var partner = entry.partner; var method = entry.method; var row = document.createElement('tr'); var action = document.createElement('a');
+      action.className = 'button button--quiet table-action'; action.href = 'payment.html?id=' + encodeURIComponent(partner.id); action.textContent = 'View';
+      var isEligible = eligible(partner, method);
+      [partner.fullName, partner.phone, partner.email, badge(partner.kyc ? partner.kyc.verificationStatus : null, partner.kyc && partner.kyc.verificationStatus === 'verified'), method ? method.methodType : null, payoutValue(method), badge(method ? method.status : null, method && method.status === 'verified'), badge(isEligible ? 'Eligible' : 'Not eligible', isEligible), action].forEach(function (value) { row.appendChild(cell(value)); });
+      body.appendChild(row);
+    });
+  }
   function renderPagination(data, load) {
     var node = document.getElementById('payment-pagination'); if (!node) return;
     node.textContent = '';
@@ -35,22 +56,15 @@
   }
   async function startList() {
     var body = document.getElementById('payment-table-body'); var page = 1; var refresh = document.getElementById('payment-refresh');
+    var statusFilter = document.getElementById('payment-status-filter'); var loadedRows = [];
     var load = async function (requestedPage) {
       page = requestedPage || 1; error(''); if (refresh) refresh.disabled = true;
       try {
         var search = document.getElementById('payment-search'); var query = new URLSearchParams({ page: String(page), pageSize: '20' });
         if (search && search.value.trim()) query.set('search', search.value.trim());
         var data = await window.SwaadxAdminApi.getDeliveryPartners(query.toString());
-        var rows = await Promise.all(data.items.map(loadPaymentData));
-        body.textContent = '';
-        if (!rows.length) { var empty = document.createElement('tr'); empty.appendChild(cell('No delivery partners found.')); empty.firstChild.colSpan = 9; body.appendChild(empty); }
-        rows.forEach(function (entry) {
-          var partner = entry.partner; var method = entry.method; var row = document.createElement('tr'); var action = document.createElement('a');
-          action.className = 'button button--quiet table-action'; action.href = 'payment.html?id=' + encodeURIComponent(partner.id); action.textContent = 'View';
-          var isEligible = eligible(partner, method);
-          [partner.fullName, partner.phone, partner.email, badge(partner.kyc ? partner.kyc.verificationStatus : null, partner.kyc && partner.kyc.verificationStatus === 'verified'), method ? method.methodType : null, payoutValue(method), badge(method ? method.status : null, method && method.status === 'verified'), badge(isEligible ? 'Eligible' : 'Not eligible', isEligible), action].forEach(function (value) { row.appendChild(cell(value)); });
-          body.appendChild(row);
-        });
+        loadedRows = await Promise.all(data.items.map(loadPaymentData));
+        renderRows(loadedRows, statusFilter ? statusFilter.value : 'all', body);
         renderPagination(data, load);
       } catch (caught) { error(caught.message || 'Unable to load payment details.'); body.textContent = ''; }
       finally { if (refresh) refresh.disabled = false; }
@@ -58,6 +72,7 @@
     document.getElementById('payment-search-button').onclick = function () { load(1); };
     refresh.onclick = function () { load(page); };
     document.getElementById('payment-search').onkeydown = function (event) { if (event.key === 'Enter') load(1); };
+    if (statusFilter) statusFilter.onchange = function () { renderRows(loadedRows, statusFilter.value, body); };
     await load(1);
   }
   async function startDetail() {
