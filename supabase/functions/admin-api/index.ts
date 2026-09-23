@@ -1005,6 +1005,30 @@ async function listKycDocuments(profileId: string) {
   }));
 }
 
+async function getKycDocumentStorageMetadata(storagePath: string) {
+  const pathParts = storagePath.split('/');
+  const fileName = pathParts.pop() ?? '';
+  const folderPath = pathParts.join('/');
+  if (!fileName || !folderPath) return { fileName, mimeType: null as string | null };
+
+  try {
+    const { data, error } = await supabaseAdmin.storage.from(privateKycBucket).list(folderPath, {
+      limit: 10,
+      search: fileName,
+    });
+    if (error) throw error;
+    const file = (data ?? []).find((entry) => entry.id && entry.name === fileName);
+    const candidate = typeof file?.metadata?.mimetype === 'string' ? file.metadata.mimetype.toLowerCase() : null;
+    const mimeType = candidate && ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(candidate)
+      ? candidate
+      : null;
+    return { fileName, mimeType };
+  } catch (error) {
+    console.warn('Unable to load KYC document storage metadata:', error instanceof Error ? error.message : 'unknown error');
+    return { fileName, mimeType: null as string | null };
+  }
+}
+
 async function viewKycDocument(documentId: string, adminClerkUserId: string, requestId: string) {
   const { data, error } = await supabaseAdmin.from('delivery_partner_kyc_documents')
     .select('id,document_type,verification_status,expiry_date,submitted_at,verified_at,rejected_at,rejection_reason,storage_path,kyc_profile_id,delivery_partner_id')
@@ -1021,6 +1045,7 @@ async function viewKycDocument(documentId: string, adminClerkUserId: string, req
   if (!data.storage_path || !data.storage_path.startsWith(privateKycPrefix)) throw new Error('Document storage is not configured for private access.');
   const { data: signed, error: signedError } = await supabaseAdmin.storage.from(privateKycBucket).createSignedUrl(data.storage_path, 60);
   if (signedError || !signed?.signedUrl) throw signedError ?? new Error('Unable to create document preview.');
+  const storageMetadata = await getKycDocumentStorageMetadata(data.storage_path);
   await recordAdminAuditEvent({
     adminClerkUserId, action: 'document_viewed', resourceType: 'kyc_document', resourceId: data.id,
     requestId, metadata: { documentType: data.document_type, kycProfileId: data.kyc_profile_id },
@@ -1028,7 +1053,8 @@ async function viewKycDocument(documentId: string, adminClerkUserId: string, req
   return {
     signedUrl: signed.signedUrl, expiresInSeconds: 60, document: {
       id: data.id, documentType: data.document_type, verificationStatus: data.verification_status,
-      expiryDate: data.expiry_date,
+      expiryDate: data.expiry_date, mimeType: storageMetadata.mimeType, fileName: storageMetadata.fileName,
+      inlinePreviewAvailable: Boolean(storageMetadata.mimeType),
     },
   };
 }

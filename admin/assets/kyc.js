@@ -93,7 +93,22 @@
     setBusy(button, true); button.textContent = 'Loading…';
     try {
       var result = await window.SwaadxAdminApi.viewKycDocument(id); var viewer = document.getElementById('document-viewer'); viewer.textContent = '';
-      var link = document.createElement('a'); link.href = result.signedUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open secure document preview'; viewer.appendChild(link);
+      var documentInfo = result.document || {}; var mimeType = documentInfo.mimeType;
+      var fallback = document.createElement('a'); fallback.href = result.signedUrl; fallback.target = '_blank'; fallback.rel = 'noopener noreferrer'; fallback.textContent = 'Open in new tab';
+      var preview;
+      if (mimeType === 'application/pdf') {
+        preview = document.createElement('iframe'); preview.src = result.signedUrl; preview.title = 'KYC document PDF preview'; preview.className = 'secure-preview__frame';
+      } else if (mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp') {
+        preview = document.createElement('img'); preview.src = result.signedUrl; preview.alt = 'KYC document image preview'; preview.className = 'secure-preview__image';
+      }
+      if (preview) {
+        preview.onerror = function () { preview.hidden = true; fallback.textContent = 'Inline preview unavailable — open in new tab'; };
+        viewer.appendChild(preview);
+        viewer.appendChild(document.createElement('br'));
+        viewer.appendChild(fallback);
+      } else {
+        var unavailable = document.createElement('span'); unavailable.className = 'muted'; unavailable.textContent = 'Inline preview unavailable for this document type. '; viewer.appendChild(unavailable); viewer.appendChild(fallback);
+      }
       var expiry = document.createElement('span'); expiry.className = 'muted'; expiry.textContent = ' (expires in ' + result.expiresInSeconds + ' seconds)'; viewer.appendChild(expiry);
     } catch (caught) { error(caught.message || 'Unable to open document preview.'); }
     button.textContent = 'View document'; setBusy(button, false);
