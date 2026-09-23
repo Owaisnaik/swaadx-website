@@ -7,6 +7,26 @@
   function error(message) { var node = document.getElementById('page-error'); if (node) node.textContent = message || ''; }
   function empty(body, columns, message) { body.textContent = ''; var row = document.createElement('tr'); var cellNode = document.createElement('td'); cellNode.colSpan = columns; cellNode.className = 'table-empty'; cellNode.textContent = message; row.appendChild(cellNode); body.appendChild(row); }
   function setBusy(button, busy) { if (button) { button.disabled = busy; button.setAttribute('aria-busy', busy ? 'true' : 'false'); } }
+  var activePreviewUrl = null;
+  function revokePreviewUrl() {
+    if (activePreviewUrl) {
+      URL.revokeObjectURL(activePreviewUrl);
+      activePreviewUrl = null;
+    }
+  }
+  function supportedMimeType(value) {
+    return ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].indexOf(value) !== -1 ? value : null;
+  }
+  function detectMimeType(bytes) {
+    if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return 'application/pdf';
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return 'image/png';
+    if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp';
+    return null;
+  }
+  function appendOpenLink(viewer, signedUrl, label) {
+    var link = document.createElement('a'); link.href = signedUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = label || 'Open in new tab'; viewer.appendChild(link);
+  }
   function renderPagination(data, load) {
     var node = document.getElementById('kyc-pagination'); if (!node) return;
     node.textContent = '';
@@ -91,27 +111,55 @@
   }
   async function viewDocument(id, button) {
     setBusy(button, true); button.textContent = 'Loading…';
+    var viewer = document.getElementById('document-viewer');
+    if (viewer) { revokePreviewUrl(); viewer.textContent = 'Loading secure document preview…'; }
     try {
-      var result = await window.SwaadxAdminApi.viewKycDocument(id); var viewer = document.getElementById('document-viewer'); viewer.textContent = '';
-      var documentInfo = result.document || {}; var mimeType = documentInfo.mimeType;
-      var fallback = document.createElement('a'); fallback.href = result.signedUrl; fallback.target = '_blank'; fallback.rel = 'noopener noreferrer'; fallback.textContent = 'Open in new tab';
-      var preview;
-      if (mimeType === 'application/pdf') {
-        preview = document.createElement('iframe'); preview.src = result.signedUrl; preview.title = 'KYC document PDF preview'; preview.className = 'secure-preview__frame';
-      } else if (mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp') {
-        preview = document.createElement('img'); preview.src = result.signedUrl; preview.alt = 'KYC document image preview'; preview.className = 'secure-preview__image';
-      }
-      if (preview) {
-        preview.onerror = function () { preview.hidden = true; fallback.textContent = 'Inline preview unavailable — open in new tab'; };
-        viewer.appendChild(preview);
-        viewer.appendChild(document.createElement('br'));
-        viewer.appendChild(fallback);
+      var result = await window.SwaadxAdminApi.viewKycDocument(id);
+      if (!result.signedUrl) throw new Error('Secure document URL was not returned.');
+      var response = await fetch(result.signedUrl);
+      if (!response.ok) throw new Error('Unable to fetch the secure document.');
+      var bytes = new Uint8Array(await response.arrayBuffer());
+      var documentInfo = result.document || {};
+      var mimeType = supportedMimeType(documentInfo.mimeType);
+      if (!mimeType) mimeType = detectMimeType(bytes);
+      if (!mimeType) {
+        if (viewer) {
+          viewer.textContent = 'Inline preview unavailable for this document type. ';
+          appendOpenLink(viewer, result.signedUrl);
+        }
       } else {
-        var unavailable = document.createElement('span'); unavailable.className = 'muted'; unavailable.textContent = 'Inline preview unavailable for this document type. '; viewer.appendChild(unavailable); viewer.appendChild(fallback);
+        var blob = new Blob([bytes], { type: mimeType });
+        activePreviewUrl = URL.createObjectURL(blob);
+        var preview;
+        if (mimeType === 'application/pdf') {
+          preview = document.createElement('iframe'); preview.src = activePreviewUrl; preview.title = 'KYC document PDF preview'; preview.className = 'secure-preview__frame';
+        } else {
+          preview = document.createElement('img'); preview.src = activePreviewUrl; preview.alt = 'KYC document image preview'; preview.className = 'secure-preview__image';
+        }
+        preview.onerror = function () {
+          if (viewer) {
+            revokePreviewUrl();
+            viewer.textContent = 'Inline preview unavailable. ';
+            appendOpenLink(viewer, result.signedUrl);
+          }
+        };
+        if (viewer) {
+          viewer.textContent = '';
+          viewer.appendChild(preview);
+        }
       }
-      var expiry = document.createElement('span'); expiry.className = 'muted'; expiry.textContent = ' (expires in ' + result.expiresInSeconds + ' seconds)'; viewer.appendChild(expiry);
-    } catch (caught) { error(caught.message || 'Unable to open document preview.'); }
+      if (viewer) {
+        var expiry = document.createElement('span'); expiry.className = 'muted'; expiry.textContent = ' (expires in ' + result.expiresInSeconds + ' seconds)'; viewer.appendChild(expiry);
+      }
+    } catch (caught) {
+      if (viewer) {
+        viewer.textContent = 'Unable to load inline preview. ';
+        if (typeof result !== 'undefined' && result && result.signedUrl) appendOpenLink(viewer, result.signedUrl);
+      }
+      error(caught.message || 'Unable to open document preview.');
+    }
     button.textContent = 'View document'; setBusy(button, false);
   }
+  window.addEventListener('pagehide', revokePreviewUrl);
   window.SwaadxKyc = { startList: startList, startReview: startReview };
 })();
