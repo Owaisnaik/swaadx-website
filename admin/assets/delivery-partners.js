@@ -139,8 +139,9 @@
     var container = document.getElementById('partner-actions');
     if (!container) return;
     container.textContent = '';
+    var canApprove = partner.approvalRequirements && partner.approvalRequirements.missing && !partner.approvalRequirements.missing.length;
     var actions = {
-      pending: [{ label: 'Approve', action: 'approve' }, { label: 'Reject', action: 'reject' }],
+      pending: (canApprove ? [{ label: 'Approve', action: 'approve' }] : []).concat([{ label: 'Reject', action: 'reject' }]),
       approved: [{ label: 'Suspend', action: 'suspend' }],
       suspended: [{ label: 'Reactivate', action: 'reactivate' }]
     }[partner.status] || [];
@@ -151,7 +152,13 @@
       button.addEventListener('click', function () { changeStatus(partner, item.action, button); });
       container.appendChild(button);
     });
-    if (!actions.length) container.textContent = 'No status actions are available for this partner.';
+    if (partner.status === 'pending' && !canApprove) {
+      var missing = document.createElement('p');
+      missing.className = 'muted';
+      missing.textContent = 'Approval unavailable: ' + ((partner.approvalRequirements && partner.approvalRequirements.missing) || ['Application, KYC, and payout review are required.']).join(' ');
+      container.appendChild(missing);
+    }
+    if (!actions.length && partner.status !== 'pending') container.textContent = 'No status actions are available for this partner.';
   }
   async function changeStatus(partner, action, button) {
     var label = action.charAt(0).toUpperCase() + action.slice(1);
@@ -183,7 +190,9 @@
         'Address': partner.address, 'Date of birth': partner.dateOfBirth, 'Vehicle type': partner.vehicleType,
         'Registration': partner.vehicleRegistrationNumber, 'Driving licence': partner.drivingLicenseNumber,
         'Licence expiry': partner.drivingLicenseExpiry, 'RC number': partner.rcNumber,
+        'Application status': partner.applicationStatus,
         'KYC status': partner.kyc && partner.kyc.verificationStatus,
+        'Payout method status': partner.payoutStatus,
         'Legal name': partner.kyc && partner.kyc.legalName, 'PAN last4': partner.kyc && partner.kyc.panLast4
       };
       Object.keys(fields).forEach(function (key) {
@@ -193,7 +202,22 @@
       var active = document.getElementById('active-delivery');
       if (active) active.textContent = partner.activeDelivery ? text(partner.activeDelivery.orderNumber || partner.activeDelivery.orderId) + ' · ' + text(partner.activeDelivery.status) : 'No active delivery';
       var kycLink = document.getElementById('kyc-link');
-      if (kycLink && partner.kyc && partner.kyc.id) kycLink.href = '../kyc/review.html?id=' + encodeURIComponent(partner.kyc.id);
+      if (kycLink && partner.kyc && partner.kyc.id) {
+        var kycStatus = partner.kyc.verificationStatus;
+        if (kycStatus === 'verified') {
+          kycLink.href = '../kyc/review.html?id=' + encodeURIComponent(partner.kyc.id);
+          kycLink.textContent = 'View verified KYC';
+        } else if (kycStatus === 'submitted' || kycStatus === 'under_review') {
+          kycLink.href = '../kyc/review.html?id=' + encodeURIComponent(partner.kyc.id);
+          kycLink.textContent = 'Open KYC review';
+        } else {
+          kycLink.textContent = kycStatus === 'rejected' ? 'KYC rejected' : 'KYC not submitted';
+          kycLink.removeAttribute('href');
+        }
+      } else if (kycLink) {
+        kycLink.textContent = 'No KYC profile';
+        kycLink.removeAttribute('href');
+      }
       renderActions(partner);
       await Promise.all([loadDeliveries(id), loadEarnings(id), loadPayoutMethods(id), loadPayouts(id), loadKycDocuments(partner.kyc && partner.kyc.id)]);
     } catch (caught) { error(caught.message || 'Unable to load the delivery partner.'); }
