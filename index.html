@@ -480,10 +480,10 @@ filter:blur(55px);opacity:.22;animation:ambient 11s ease-in-out infinite alterna
 .partner .btn .arrow{display:inline-block;transition:transform .35s ease}.partner:hover .btn .arrow{transform:translate(3px,-3px)}
 .partner-activity{position:absolute;z-index:3;left:22px;bottom:22px;padding:8px 11px;border-radius:999px;background:rgba(18,16,15,.72);backdrop-filter:blur(12px);color:#fff;font-size:8px;letter-spacing:.1em;text-transform:uppercase;border:1px solid rgba(255,255,255,.18);box-shadow:0 12px 30px rgba(0,0,0,.16)}
 .partner-activity i{display:inline-block;width:5px;height:5px;border-radius:50%;background:#5ed38a;margin-right:6px;box-shadow:0 0 0 4px rgba(94,211,138,.10);animation:partnerPulse 2s ease-in-out infinite}
-.partner-flow{display:flex;align-items:center;justify-content:center;gap:12px;margin:48px auto 10px;color:#756e68;font-size:8px;letter-spacing:.16em;text-transform:uppercase}.partner-flow .flow-node{padding:9px 12px;border:1px solid rgba(255,255,255,.65);background:rgba(255,253,249,.55);backdrop-filter:blur(10px);border-radius:999px}.partner-flow .flow-line{position:relative;width:38px;height:1px;background:rgba(117,110,104,.2);overflow:hidden}.partner-flow .flow-line:after{content:"";position:absolute;left:-8px;top:-2px;width:7px;height:5px;border-radius:50%;background:var(--orange);box-shadow:0 0 10px rgba(255,85,27,.35);animation:flowMove 2.8s linear infinite}.partner-flow .flow-node:nth-of-type(3){color:#292725}.partner-flow .flow-node:nth-of-type(3):before{content:"SX";margin-right:5px;font-weight:900;color:#222}.partner-flow .flow-node:nth-of-type(3){font-size:0}.partner-flow .flow-node:nth-of-type(3)::after{content:"SWAADX";font-size:8px;letter-spacing:.16em}
+.partner-flow{display:flex;align-items:center;justify-content:center;gap:12px;margin:48px auto 10px;color:#756e68;font-size:8px;letter-spacing:.16em;text-transform:uppercase}.partner-flow .flow-node{padding:9px 12px;border:1px solid rgba(255,255,255,.65);background:rgba(255,253,249,.55);backdrop-filter:blur(10px);border-radius:999px}.partner-flow .flow-line{position:relative;width:38px;height:1px;background:rgba(117,110,104,.2);overflow:hidden}.partner-flow .flow-line:after{content:"";position:absolute;left:-8px;top:-2px;width:7px;height:5px;border-radius:50%;background:var(--orange);box-shadow:0 0 10px rgba(255,85,27,.35);animation:flowMove 2.8s linear infinite}
 @keyframes flowMove{to{transform:translateX(50px)}}
-@media(max-width:900px){.partner-activity{left:18px;bottom:18px}.partner-flow{gap:7px;margin-top:34px}.partner-flow .flow-node{padding:8px 9px;font-size:7px}.partner-flow .flow-node:nth-of-type(3)::after{font-size:7px}.partner-flow .flow-line{width:18px}}
-@media(max-width:560px){.partner{border-radius:26px}.partner-copy{padding:45px 28px 55px}.partner-meta{margin-bottom:20px}.partner-meta span{font-size:7px;padding:6px 8px}.partner-flow{margin-top:30px;gap:5px}.partner-flow .flow-line{width:10px}.partner-flow .flow-node{padding:7px 7px;font-size:6px;letter-spacing:.1em}.partner-flow .flow-node:nth-of-type(3)::after{font-size:6px;letter-spacing:.1em}.partner-activity{font-size:7px;padding:7px 9px}}
+@media(max-width:900px){.partner-activity{left:18px;bottom:18px}.partner-flow{gap:7px;margin-top:34px}.partner-flow .flow-node{padding:8px 9px;font-size:7px}.partner-flow .flow-line{width:18px}}
+@media(max-width:560px){.partner{border-radius:26px}.partner-copy{padding:45px 28px 55px}.partner-meta{margin-bottom:20px}.partner-meta span{font-size:7px;padding:6px 8px}.partner-flow{margin-top:30px;gap:5px}.partner-flow .flow-line{width:10px}.partner-flow .flow-node{padding:7px 7px;font-size:6px;letter-spacing:.1em}.partner-activity{font-size:7px;padding:7px 9px}}
 @media(prefers-reduced-motion:reduce){.partner,.partner:after,.partner-media img,.partner .btn .arrow,.partner-meta span,.partner-flow .flow-line:after,.partner-label:before{transition:none!important;animation:none!important}}
 
 </style>
@@ -2275,6 +2275,11 @@ filter:blur(55px);opacity:.22;animation:ambient 11s ease-in-out infinite alterna
 }
 </style>
 
+<style id="swaadx-v101-flow-fix">
+/* V101 — partner flow fix: four normal glass nodes, no legacy special-node styling. */
+.partner-flow .flow-node{display:inline-flex!important;align-items:center;justify-content:center!important;font-size:inherit!important;color:#756e68!important;opacity:1!important;visibility:visible!important;}
+.partner-flow .flow-node::before,.partner-flow .flow-node::after{content:none!important;display:none!important;}
+</style>
 <style id="swaadx-v95-delivery-black-glass">
 /* V95 — delivery cockpit outer glass only. Functionality and inner states remain unchanged. */
 .eco-grid > .eco-card:nth-child(3) .eco-cockpit{
@@ -2284,6 +2289,48 @@ filter:blur(55px);opacity:.22;animation:ambient 11s ease-in-out infinite alterna
   border:1px solid rgba(255,255,255,.08) !important;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 22px 50px rgba(0,0,0,.24) !important;
 }
+</style>
+<style>
+/* V98 — selective liquid-glass experiment
+   Inspired by the optical ideas of liquid-glass-js: tint, rim light, layered glass,
+   responsive surfaces and subtle pointer-driven movement. Existing layout/functionality preserved. */
+.lg-surface{position:relative;isolation:isolate;overflow:hidden;--lg-x:50%;--lg-y:18%;--lg-tint:rgba(255,255,255,.18);--lg-border:rgba(255,255,255,.62);--lg-shadow:rgba(72,42,35,.12)}
+.lg-surface::before{content:"";position:absolute;inset:-1px;z-index:-2;border-radius:inherit;background:radial-gradient(38% 55% at var(--lg-x) var(--lg-y),rgba(255,255,255,.58),transparent 58%),linear-gradient(125deg,rgba(255,255,255,.26),transparent 30%,rgba(255,140,96,.08) 58%,rgba(255,255,255,.18));opacity:.82;pointer-events:none;transition:opacity .45s ease}
+.lg-surface::after{content:"";position:absolute;z-index:-1;left:-35%;top:-120%;width:42%;height:340%;transform:rotate(20deg);background:linear-gradient(90deg,transparent,rgba(255,255,255,.30),transparent);filter:blur(9px);opacity:.32;pointer-events:none;animation:lgSheen 9s ease-in-out infinite}
+.lg-surface:hover::before{opacity:1}
+@keyframes lgSheen{0%,45%{left:-45%;opacity:0}52%{opacity:.34}72%{left:125%;opacity:.12}100%{left:125%;opacity:0}}
+
+/* Floating navigation: stronger optical depth without changing its geometry. */
+header.lg-surface{background:linear-gradient(135deg,rgba(255,251,248,.56),rgba(255,255,255,.25));border-color:rgba(255,255,255,.78);backdrop-filter:blur(30px) saturate(155%);-webkit-backdrop-filter:blur(30px) saturate(155%);box-shadow:0 22px 80px rgba(88,49,44,.12),inset 0 1px 0 rgba(255,255,255,.82),inset 0 -1px 0 rgba(255,255,255,.24)}
+header.lg-surface .nav-links a:not(.nav-cta){position:relative}
+header.lg-surface .nav-links a:not(.nav-cta)::after{content:"";position:absolute;left:50%;bottom:-7px;width:4px;height:4px;border-radius:50%;background:var(--orange);transform:translateX(-50%) scale(0);box-shadow:0 0 12px rgba(255,92,34,.55);transition:transform .35s var(--ease)}
+header.lg-surface .nav-links a:not(.nav-cta):hover::after{transform:translateX(-50%) scale(1)}
+
+/* Hero live badge gets a small glass lens rather than a flat black pill. */
+.console-live.lg-surface{background:rgba(23,22,21,.68);border:1px solid rgba(255,255,255,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 12px 28px rgba(22,18,16,.14);backdrop-filter:blur(14px) saturate(135%);-webkit-backdrop-filter:blur(14px) saturate(135%)}
+
+/* The big One Tap panel becomes the main liquid surface. */
+.order-panel.lg-surface{background:linear-gradient(135deg,rgba(255,253,249,.64),rgba(255,255,255,.38));border-color:rgba(255,255,255,.9);backdrop-filter:blur(28px) saturate(145%);-webkit-backdrop-filter:blur(28px) saturate(145%);box-shadow:0 38px 100px rgba(76,42,35,.15),inset 0 1px 0 rgba(255,255,255,.92),inset 0 -1px 0 rgba(255,255,255,.25)}
+.order-panel.lg-surface .order-restaurant{background:rgba(255,255,255,.38);border-color:rgba(255,255,255,.72);backdrop-filter:blur(18px) saturate(135%);-webkit-backdrop-filter:blur(18px) saturate(135%);box-shadow:inset 0 1px 0 rgba(255,255,255,.68)}
+.order-float.lg-surface{background:linear-gradient(135deg,rgba(255,253,249,.62),rgba(255,255,255,.30));border-color:rgba(255,255,255,.76);backdrop-filter:blur(22px) saturate(145%);-webkit-backdrop-filter:blur(22px) saturate(145%);box-shadow:0 24px 50px rgba(64,42,35,.12),inset 0 1px 0 rgba(255,255,255,.82)}
+
+/* App status + partner activity now feel like small physical glass objects. */
+.app-status.lg-surface{background:linear-gradient(135deg,rgba(52,25,17,.32),rgba(255,255,255,.08));border-color:rgba(255,241,229,.34);backdrop-filter:blur(18px) saturate(145%);-webkit-backdrop-filter:blur(18px) saturate(145%);box-shadow:0 14px 34px rgba(56,20,10,.14),inset 0 1px 0 rgba(255,255,255,.15)}
+.partner-activity.lg-surface{background:linear-gradient(135deg,rgba(18,16,15,.64),rgba(255,255,255,.10));border-color:rgba(255,255,255,.23);backdrop-filter:blur(18px) saturate(140%);-webkit-backdrop-filter:blur(18px) saturate(140%);box-shadow:0 14px 34px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.14)}
+.partner-flow .flow-node.lg-surface{background:linear-gradient(135deg,rgba(255,253,249,.58),rgba(255,255,255,.24));border-color:rgba(255,255,255,.78);backdrop-filter:blur(18px) saturate(140%);-webkit-backdrop-filter:blur(18px) saturate(140%);box-shadow:inset 0 1px 0 rgba(255,255,255,.78),0 12px 26px rgba(72,48,42,.07)}
+
+/* Contact CTA: the email pill gets the most obvious glass edge/rim treatment. */
+.contact-email.lg-surface{background:linear-gradient(135deg,rgba(255,255,255,.08),rgba(255,255,255,.035));border-color:rgba(255,255,255,.15);backdrop-filter:blur(20px) saturate(145%);-webkit-backdrop-filter:blur(20px) saturate(145%);box-shadow:0 20px 65px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.12),inset 0 -1px 0 rgba(255,255,255,.04)}
+.contact-email.lg-surface::before{background:radial-gradient(45% 80% at var(--lg-x) var(--lg-y),rgba(255,145,104,.22),transparent 60%),linear-gradient(125deg,rgba(255,255,255,.11),transparent 35%,rgba(255,104,60,.07))}
+
+/* Pointer-driven optical response. */
+@media (pointer:fine){.lg-surface{transition:transform .45s var(--ease),box-shadow .45s var(--ease),border-color .45s ease}}
+@media (max-width:700px){
+  .lg-surface::after{animation-duration:12s;opacity:.22}
+  header.lg-surface{backdrop-filter:blur(22px) saturate(145%);-webkit-backdrop-filter:blur(22px) saturate(145%)}
+  .order-panel.lg-surface{backdrop-filter:blur(22px) saturate(135%);-webkit-backdrop-filter:blur(22px) saturate(135%)}
+}
+@media (prefers-reduced-motion:reduce){.lg-surface::after{animation:none}.lg-surface{transition:none!important}}
 </style>
 </head>
 <body id="top">
@@ -2601,7 +2648,7 @@ filter:blur(55px);opacity:.22;animation:ambient 11s ease-in-out infinite alterna
 <div class="reveal" style="margin-bottom:55px"><h2 class="big-copy" style="margin-top:15px">Built for people<br><em>behind the order.</em></h2></div>
 <div class="partner reveal"><div class="partner-media"><img src="https://images.unsplash.com/photo-1556910103-1c02745aae4d?auto=format&fit=crop&w=1300&q=90" alt="Restaurant partner"><div class="partner-activity"><i></i>Partner tools · ready</div></div><div class="partner-copy"><div class="partner-label">Restaurant partner</div><h3>Put your food in motion.</h3><p>Reach local customers, manage your menu and turn great food into repeat orders through SWAADX.</p><div class="partner-meta"><span>Menu</span><span>Orders</span><span>Growth</span></div><a class="btn orange" style="width:max-content" href="mailto:naikroman642@gmail.com?subject=Restaurant%20Partner%20with%20SWAADX">Become a restaurant partner <span class="arrow">↗</span></a></div></div>
 <div class="partner reveal"><div class="partner-media"><img src="https://images.unsplash.com/photo-1526367790999-0150786686a2?auto=format&fit=crop&w=1300&q=90" alt="Delivery partner"><div class="partner-activity"><i></i>Delivery flow · live</div></div><div class="partner-copy"><div class="partner-label">Delivery partner</div><h3>Move what matters.</h3><p>Join the delivery network and get a focused experience built around routes, orders and real-time status.</p><div class="partner-meta"><span>Pickup</span><span>Move</span><span>Handoff</span></div><a class="btn" style="width:max-content" href="mailto:naikroman642@gmail.com?subject=Delivery%20Partner%20with%20SWAADX">Become a delivery partner <span class="arrow">↗</span></a></div></div>
-<div class="partner-flow" aria-hidden="true"><span class="flow-node">Restaurant</span><span class="flow-line"></span><span class="flow-node">SWAADX</span><span class="flow-line"></span><span class="flow-node">Customer</span><span class="flow-line"></span><span class="flow-node">Delivery</span></div>
+<div class="partner-flow" aria-hidden="true"><span class="flow-node">SWAADX</span><span class="flow-line"></span><span class="flow-node">RESTAURANT</span><span class="flow-line"></span><span class="flow-node">DELIVERY</span><span class="flow-line"></span><span class="flow-node">CUSTOMER</span></div>
 </div>
 </section>
 
@@ -4096,6 +4143,38 @@ addEventListener('scroll',()=>{if(!heroVisual)return;const y=Math.min(scrollY,90
   update();
 })();
 </script>
+
+<script>
+/* V98 liquid-glass micro-layer: only adds visual treatment; no existing interactions are replaced. */
+(function(){
+  const targets = [
+    document.querySelector('header'),
+    document.querySelector('.console-live'),
+    document.querySelector('.order-panel'),
+    ...document.querySelectorAll('.order-float'),
+    document.querySelector('.app-status'),
+    ...document.querySelectorAll('.partner-activity'),
+    ...document.querySelectorAll('.partner-flow .flow-node'),
+    document.querySelector('.contact-email')
+  ].filter(Boolean);
+  targets.forEach(el=>el.classList.add('lg-surface'));
+  if(!window.matchMedia('(pointer:fine)').matches) return;
+  targets.forEach(el=>{
+    el.addEventListener('pointermove', e=>{
+      const r=el.getBoundingClientRect();
+      const x=((e.clientX-r.left)/r.width)*100;
+      const y=((e.clientY-r.top)/r.height)*100;
+      el.style.setProperty('--lg-x',Math.max(0,Math.min(100,x))+'%');
+      el.style.setProperty('--lg-y',Math.max(0,Math.min(100,y))+'%');
+    },{passive:true});
+    el.addEventListener('pointerleave',()=>{
+      el.style.setProperty('--lg-x','50%');
+      el.style.setProperty('--lg-y','18%');
+    },{passive:true});
+  });
+})();
+</script>
+
 </body>
 
 <style id="v54-true-feathered-transitions">
